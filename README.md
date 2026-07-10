@@ -13,32 +13,36 @@
 - macOS / Linux  
 - 已安装 [Grok Build CLI](https://x.ai/news/grok-build-cli)（`grok` 在 PATH 里）  
 - 已登录过一次：`grok` 打开浏览器登录，生成 `~/.grok/auth.json`  
-- [uv](https://docs.astral.sh/uv/)（`brew install uv`）
+- Docker 部署：Docker + Docker Compose  
+- 手动 / 源码运行：[uv](https://docs.astral.sh/uv/)（`brew install uv`）
 
-## 部署（GrokBuild 容器）
-
-本服务**绑定本容器**，只监听 **8787**（不要再起 8080）。
+## 部署（Docker，推荐）
 
 ```bash
-systemctl status grok-chat-web
-systemctl restart grok-chat-web
-systemctl stop grok-chat-web
+cp .env.example .env   # 按需改 GROK_CHAT_TOKEN / GROK_CHAT_PROJECTS_DIR
+docker compose up -d --build
 ```
 
-- 容器内：http://127.0.0.1:8787/
-- 同网段：http://192.168.122.126:8787/
-- unit：`/etc/systemd/system/grok-chat-web.service`（`enabled`，开机自启；存档副本见 `deploy/grok-chat-web.service`，容器 rootfs 丢失时用它重建）
-- 默认项目根：`GROK_CHAT_CWD=/mnt/workspaces`
+- 默认监听 `8787`：http://127.0.0.1:8787/
+- `grok` 二进制本身**不会**打进镜像（属于 xAI 的专有 CLI，不能随意分发）——容器通过挂载宿主已登录好的 `~/.grok` 目录来复用它，见 `docker-compose.yml` 里的 `GROK_HOME_DIR`
+- `GROK_CHAT_PROJECTS_DIR` 决定容器里 `/workspace` 挂载哪个宿主目录，也就是 grok 默认能读写的项目根
+- 对话记录落在 `./data`（宿主目录，已在 `.gitignore` 里排除，不会被提交）
 
-**鉴权（2026-07-11 加）：** unit 绑定 `HOST=0.0.0.0`，同网段（`192.168.122.0/24`，含不可信的 `OpenClaw` `.121`）本可直接读 `/mnt/workspaces` 任意文件、驱动 agent 自动批准任意工具调用。现已给 `/ws` 和所有 `/api/*` 加共享 token 校验：
+**鉴权：** 只要服务监听地址不是 `127.0.0.1`（比如暴露给局域网或反代到公网），任何能连上的人都能直接读 `GROK_CHAT_CWD` 下任意文件、驱动 agent 自动批准任意工具调用。默认**不鉴权**（向后兼容单机场景），建议凡是监听非 loopback 地址就设置 `GROK_CHAT_TOKEN`：
 
-- 真实 token 存在 `_secrets/agent.env` 的 `GROK_CHAT_TOKEN`，同时写进容器 unit 的 `Environment=`（**不进 git** — `deploy/grok-chat-web.service` 里是占位符）
-- 未设置 `GROK_CHAT_TOKEN` 时不校验（向后兼容）
-- HTTP：`Authorization: Bearer <token>` 或 `?token=` query 均可；WS：浏览器不能自定义握手 header，走 `?token=` query
+- 在 `.env` 里设置 `GROK_CHAT_TOKEN`，重启容器生效
+- HTTP：`Authorization: Bearer <token>` 或 `?token=` query 均可；WebSocket 握手浏览器不能带自定义 header，走 `?token=` query
 - 浏览器首次请求若收到 401，`app.js` 会弹窗要求粘贴 token，存 `localStorage`（`gcw_token`），之后自动带上
-- 换 token：改 `agent.env` 里的值 + 容器 unit 里的 `Environment=GROK_CHAT_TOKEN=` + `systemctl daemon-reload && systemctl restart grok-chat-web`；浏览器端 `localStorage.removeItem("gcw_token")` 后刷新会重新弹窗
+- 换 token：改 `.env` + 重启容器；浏览器端清掉 `localStorage.gcw_token` 后刷新会重新弹窗
 
-手动调试（仅当 systemd 未运行时）可用 `./start.sh`，且强制端口 8787。
+## 部署（不用 Docker，直接跑）
+
+```bash
+./start.sh   # 需要本机已装 uv + grok，固定监听 8787
+```
+
+或手动 `uv sync && uv run uvicorn app.main:app --host 0.0.0.0 --port 8787`。`deploy/grok-chat-web.example.service` 是一份可参考的 systemd unit 模板（路径按你自己的部署改）。
+
 ## 快捷键
 
 | 操作 | 按键 |
@@ -54,9 +58,11 @@ systemctl stop grok-chat-web
 | 变量 | 默认 | 说明 |
 |------|------|------|
 | `PORT` | `8787` | HTTP 端口 |
-| `HOST` | `127.0.0.1` | 绑定地址（仅本机） |
-| `GROK_BIN` | `grok` | grok 可执行文件 |
+| `HOST` | `127.0.0.1` | 绑定地址（Docker 镜像里默认 `0.0.0.0`，见上面鉴权说明） |
+| `GROK_BIN` | `grok` | grok 可执行文件（Docker 里指向挂载进来的 `/opt/grok-home/bin/grok`） |
+| `GROK_HOME` | `~/.grok` | grok 配置/会话目录（Docker 里指向 `/opt/grok-home`） |
 | `GROK_CHAT_CWD` | 自动探测 | 初始工作目录 |
+| `GROK_CHAT_TOKEN` | （未设置） | 鉴权共享密钥，见上面鉴权说明 |
 | `GROK_CHAT_MODEL` | （CLI 默认） | 模型 ID |
 | `GROK_CHAT_AUTO_APPROVE` | `1` | 自动批准工具（`0` 则网页弹批准） |
 | `GROK_CHAT_PREWARM` | `1` | 启动时预热 agent |
@@ -73,5 +79,5 @@ Browser  --WebSocket-->  FastAPI (app/main.py)
 ## 说明
 
 - 这是 **MVP**，不是 Cursor 完整替代品。  
-- Agent 跑在你本机；网页只连 `127.0.0.1`。  
-- 若提示登录失败：在终端再跑一次 `grok` 完成 OAuth。
+- Agent 跑在部署它的机器上；默认只监听本机，暴露给网络前请设置 `GROK_CHAT_TOKEN`。  
+- 若提示登录失败：在宿主机终端再跑一次 `grok` 完成 OAuth（登录状态在 `~/.grok`，Docker 部署靠挂载复用它，不会重新登录一遍）。

@@ -1,0 +1,25 @@
+[Unit]
+Description=Grok Chat Web (browser shell for Grok Build ACP)
+Documentation=https://github.com/YOUR_GITHUB_USER/grok-chat-web
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/grok-chat-web
+Environment=HOST=0.0.0.0
+Environment=PORT=8787
+Environment=GROK_CHAT_PREWARM=1
+Environment=GROK_CHAT_AUTO_APPROVE=1
+Environment=GROK_CHAT_CWD=/opt/workspace
+# Set a real value if this listens on anything other than 127.0.0.1 -- never commit the real value.
+Environment=GROK_CHAT_TOKEN=__SET_ME__
+Environment=PATH=/root/.grok/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/opt/grok-chat-web/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8787 --proxy-headers
+Restart=on-failure
+RestartSec=3
+KillMode=control-group
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target
