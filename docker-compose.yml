@@ -4,7 +4,11 @@ services:
     container_name: grok-chat-web
     restart: unless-stopped
     ports:
-      - "${PORT:-8787}:8787"
+      # Loopback-only by default -- this service can read arbitrary files
+      # under GROK_CHAT_CWD and (with GROK_CHAT_AUTO_APPROVE=1) run tools
+      # with no per-action gate. Only bind a non-loopback address once
+      # GROK_CHAT_TOKEN is set, e.g. BIND_ADDR=0.0.0.0 in .env.
+      - "${BIND_ADDR:-127.0.0.1}:${PORT:-8787}:8787"
     environment:
       - GROK_HOME=/opt/grok-home
       - GROK_BIN=/opt/grok-home/bin/grok
