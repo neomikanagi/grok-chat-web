@@ -2,6 +2,14 @@
 
 > Cursor / GrokBuild / Claude Code 共用。换棒时在**最上面**追加一条，不要删历史。
 
+## 2026-07-10 — grokbuild → user (UI v2)
+
+- **状态：** 成功
+- **改了：** `static/index.html` `static/app.js` `static/style.css` — 删除对话按钮；右侧可折叠文件夹栏；「项目根」文案
+- **请你：** 硬刷新浏览器（Cmd+Shift+R）加载 `?v=2` 静态资源
+
+---
+
 ## 2026-07-10 — grokbuild → user (morning)
 
 - **状态：** 成功（本机 smoke test 已过）
