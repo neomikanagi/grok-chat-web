@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Grok Chat Web</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div id="app">
+    <header>
+      <div class="brand">Grok <span>Chat</span></div>
+      <div class="status">
+        <span id="dot" class="dot" title="connection"></span>
+        <span id="statusText">connecting…</span>
+      </div>
+      <button id="cwdBtn" class="cwd-btn" type="button" title="Change working folder">…</button>
+      <button id="browseBtn" class="icon-btn" type="button" title="Browse folders">📁</button>
+      <button id="newSessionBtn" class="icon-btn" type="button" title="New session in same folder">↻</button>
+    </header>
+
+    <main id="messages" aria-live="polite"></main>
+
+    <div id="composer-wrap">
+      <div class="hint">
+        <span><kbd>Enter</kbd> 换行</span>
+        <span><kbd id="modKey">⌘</kbd>+<kbd>Enter</kbd> 发送</span>
+        <span><kbd>@</kbd> 插入路径</span>
+        <span>点击消息右上角可复制</span>
+      </div>
+      <div id="composer-area">
+        <div id="ac" role="listbox"></div>
+        <div id="composer">
+          <textarea
+            id="input"
+            placeholder="随便写… 长文也不怕。Enter 换行；⌘/Ctrl+Enter 发送。输入 @ 选文件或文件夹。"
+            autofocus
+          ></textarea>
+          <div class="composer-actions">
+            <button id="sendBtn" class="primary-btn" type="button">发送</button>
+            <button id="cancelBtn" class="ghost-btn" type="button" disabled>停止</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Folder picker modal -->
+  <div id="picker" class="modal-backdrop" role="dialog" aria-modal="true">
+    <div class="modal">
+      <header>
+        <div class="brand">选择工作目录</div>
+        <button id="pickerClose" class="ghost-btn" type="button">关闭</button>
+      </header>
+      <div id="pickerPath" class="path-bar"></div>
+      <div id="pickerList" class="list"></div>
+      <footer>
+        <button id="pickerUp" class="ghost-btn" type="button">上级</button>
+        <button id="pickerUse" class="primary-btn" type="button">用这个目录</button>
+      </footer>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
