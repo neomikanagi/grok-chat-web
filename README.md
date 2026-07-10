@@ -15,22 +15,22 @@
 - 已登录过一次：`grok` 打开浏览器登录，生成 `~/.grok/auth.json`  
 - [uv](https://docs.astral.sh/uv/)（`brew install uv`）
 
-## 启动
+## 部署（GrokBuild 容器）
+
+本服务**绑定本容器**，只监听 **8787**（不要再起 8080）。
 
 ```bash
-cd /path/to/grok-chat-web
-chmod +x start.sh
-./start.sh
+systemctl status grok-chat-web
+systemctl restart grok-chat-web
+systemctl stop grok-chat-web
 ```
 
-浏览器打开：http://127.0.0.1:8787/
+- 容器内：http://127.0.0.1:8787/
+- 同网段：http://192.168.122.126:8787/
+- unit：`/etc/systemd/system/grok-chat-web.service`（`enabled`，开机自启）
+- 默认项目根：`GROK_CHAT_CWD=/mnt/workspaces`
 
-换端口：
-
-```bash
-PORT=9000 ./start.sh
-```
-
+手动调试（仅当 systemd 未运行时）可用 `./start.sh`，且强制端口 8787。
 ## 快捷键
 
 | 操作 | 按键 |

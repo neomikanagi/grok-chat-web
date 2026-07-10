@@ -2,6 +2,14 @@
 
 > Cursor / GrokBuild / Claude Code 共用。换棒时在**最上面**追加一条，不要删历史。
 
+## 2026-07-10 — grokbuild → user (systemd pin)
+
+- **状态：** 成功
+- **改了：** 停掉 8080；仅 8787；`/etc/systemd/system/grok-chat-web.service` enabled；`start.sh`/`README` 标明容器绑定
+- **请你：** 只用 http://192.168.122.126:8787/ ；管理用 `systemctl restart grok-chat-web`。**不要**再起第二实例。
+
+---
+
 ## 2026-07-10 — grokbuild → user (UI v2)
 
 - **状态：** 成功
