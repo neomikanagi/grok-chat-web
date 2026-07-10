@@ -4,15 +4,18 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Grok Chat Web</title>
-  <link rel="stylesheet" href="/static/style.css?v=5" />
+  <link rel="stylesheet" href="/static/style.css?v=6" />
 </head>
 <body>
   <div id="app" class="layout">
-    <!-- Left: conversations on THIS SERVER (disk), not browser cache -->
-    <aside id="chatRail" class="chat-rail" aria-label="本机对话">
+    <!-- Left: conversations on THIS SERVER (disk), collapsible like right -->
+    <aside id="chatRail" class="chat-rail open" aria-label="本机对话">
       <div class="chat-rail-head">
         <div class="sidebar-title">本机对话</div>
-        <button id="newChatBtn" class="primary-btn small" type="button" title="新建对话（存服务器）">＋ 新对话</button>
+        <div class="chat-rail-head-actions">
+          <button id="newChatBtn" class="primary-btn small" type="button" title="新建对话（存服务器）">＋</button>
+          <button id="chatRailClose" class="icon-btn" type="button" title="折叠">⟨</button>
+        </div>
       </div>
       <div id="chatList" class="chat-list"></div>
       <div class="chat-rail-foot">存于本机服务器磁盘 · 不显示云端会话</div>
@@ -26,8 +29,8 @@
           <span id="statusText">connecting…</span>
         </div>
         <button id="cwdBtn" class="cwd-btn" type="button" title="项目根（很少改）">项目根：…</button>
-        <button id="toggleChatRail" class="icon-btn" type="button" title="对话列表">💬</button>
-        <button id="toggleSidebar" class="icon-btn" type="button" title="引用文件">📁</button>
+        <button id="toggleChatRail" class="icon-btn" type="button" title="展开/折叠对话列表">💬</button>
+        <button id="toggleSidebar" class="icon-btn" type="button" title="展开/折叠引用文件">📁</button>
       </header>
 
       <main id="messages" aria-live="polite"></main>
@@ -101,6 +104,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=5"></script>
+  <script src="/static/app.js?v=6"></script>
 </body>
 </html>

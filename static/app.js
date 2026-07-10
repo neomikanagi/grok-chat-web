@@ -1,4 +1,4 @@
-/* Grok Chat Web v5 — server-side (this machine) conversations */
+/* Grok Chat Web v6 — collapsible rails + per-message work panel */
 (() => {
   const $ = (id) => document.getElementById(id);
 
@@ -13,6 +13,8 @@
   const newChatBtn = $("newChatBtn");
   const chatListEl = $("chatList");
   const toggleChatRail = $("toggleChatRail");
+  const chatRailClose = $("chatRailClose");
+  const chatRail = $("chatRail");
   const toggleSidebar = $("toggleSidebar");
   const sidebar = $("sidebar");
   const sidebarClose = $("sidebarClose");
@@ -46,12 +48,22 @@
   /** @type {Array<{id,title,cwd,updatedAt,messageCount}>} */
   let convItems = [];
 
-  let currentAgentEl = null;
-  let currentAgentBody = null;
-  let currentThoughtEl = null;
-  let currentThinkToggle = null;
-  let agentBuf = "";
-  let thoughtBuf = "";
+  /**
+   * Active streaming turn. Each finished message keeps its own DOM + handlers;
+   * we never share global thought text across toggles.
+   * @type {null | {
+   *   el: HTMLElement,
+   *   body: HTMLElement,
+   *   toggle: HTMLElement,
+   *   panel: HTMLElement,
+   *   thoughtBlock: HTMLElement,
+   *   toolsBlock: HTMLElement,
+   *   agentText: string,
+   *   thoughtText: string,
+   *   toolCount: number,
+   * }}
+   */
+  let currentTurn = null;
 
   let acItems = [];
   let acIndex = 0;
@@ -66,6 +78,7 @@
     appEl.classList.toggle("sidebar-collapsed", !sidebarOpen);
     appEl.classList.toggle("chat-rail-collapsed", !chatRailOpen);
     sidebar.classList.toggle("open", sidebarOpen);
+    if (chatRail) chatRail.classList.toggle("open", chatRailOpen);
     localStorage.setItem("gcw_sidebar", sidebarOpen ? "1" : "0");
     localStorage.setItem("gcw_chat_rail", chatRailOpen ? "1" : "0");
   }
@@ -208,36 +221,82 @@
     scrollBottom();
   }
 
-  function addAssistantStatic(content, thought) {
-    const el = document.createElement("div");
-    el.className = "msg agent";
-    el.innerHTML = `
+  function agentShellHtml() {
+    return `
       <div class="role">
         <span>Grok</span>
         <button class="copy-btn" type="button" data-copy>复制</button>
       </div>
-      <button type="button" class="think-toggle" style="display:none">
+      <button type="button" class="work-toggle" aria-expanded="false">
         <span class="chev">▶</span>
-        <span class="think-label">展开思考过程</span>
+        <span class="work-label">工作过程</span>
       </button>
-      <div class="thought"></div>
+      <div class="work-panel">
+        <div class="thought-block"></div>
+        <div class="tools-block"></div>
+      </div>
       <div class="body markdown"></div>`;
+  }
+
+  /**
+   * Wire THIS message's work toggle to THIS panel only (closure over local nodes).
+   * Critical: never read global currentTurn inside the click handler for history msgs.
+   */
+  function wireWorkToggle(toggle, panel, getSummary) {
+    toggle.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const open = panel.classList.toggle("open");
+      toggle.setAttribute("aria-expanded", open ? "true" : "false");
+      toggle.querySelector(".chev").textContent = open ? "▼" : "▶";
+      const base = typeof getSummary === "function" ? getSummary() : "工作过程";
+      toggle.querySelector(".work-label").textContent = open
+        ? `收起 · ${base}`
+        : base;
+    });
+  }
+
+  function workSummary(thoughtText, toolCount) {
+    const parts = [];
+    if (thoughtText && thoughtText.trim()) parts.push("思考");
+    if (toolCount > 0) parts.push(`${toolCount} 个工具`);
+    if (!parts.length) return "工作过程";
+    return parts.join(" · ");
+  }
+
+  function refreshTurnChrome(turn) {
+    if (!turn) return;
+    const has =
+      (turn.thoughtText && turn.thoughtText.trim()) || turn.toolCount > 0;
+    turn.toggle.classList.toggle("visible", !!has);
+    const summary = workSummary(turn.thoughtText, turn.toolCount);
+    const open = turn.panel.classList.contains("open");
+    turn.toggle.querySelector(".work-label").textContent = open
+      ? `收起 · ${summary}`
+      : summary;
+    // keep panel closed by default while streaming
+    turn.thoughtBlock.textContent = turn.thoughtText || "";
+  }
+
+  function addAssistantStatic(content, thought) {
+    const el = document.createElement("div");
+    el.className = "msg agent";
+    el.innerHTML = agentShellHtml();
     const body = el.querySelector(".body");
-    const thoughtEl = el.querySelector(".thought");
-    const toggle = el.querySelector(".think-toggle");
+    const toggle = el.querySelector(".work-toggle");
+    const panel = el.querySelector(".work-panel");
+    const thoughtBlock = el.querySelector(".thought-block");
     body.innerHTML = renderMarkdown(content || "");
     wireCopy(el, content || "");
-    if (thought && thought.trim()) {
-      thoughtEl.textContent = thought;
-      toggle.style.display = "inline-flex";
-      toggle.addEventListener("click", () => {
-        const open = thoughtEl.classList.toggle("open");
-        toggle.querySelector(".chev").textContent = open ? "▼" : "▶";
-        toggle.querySelector(".think-label").textContent = open
-          ? "收起思考过程"
-          : "展开思考过程";
-      });
+    const t = thought || "";
+    if (t.trim()) {
+      thoughtBlock.textContent = t;
+      toggle.classList.add("visible");
+      const summary = workSummary(t, 0);
+      toggle.querySelector(".work-label").textContent = summary;
+      wireWorkToggle(toggle, panel, () => summary);
     }
+    // panel stays closed (no .open)
     messagesEl.appendChild(el);
     scrollBottom();
   }
@@ -248,59 +307,49 @@
       if (m.role === "user") addUser(m.content || "");
       else if (m.role === "assistant") addAssistantStatic(m.content || "", m.thought || "");
       else if (m.role === "system") addSystem(m.content || "");
-      else if (m.role === "tool") {
-        addTool({ title: m.content || "tool", kind: "tool", status: "" });
-      }
+      // tool rows from store: skip standalone (live tools live inside work panel)
     }
   }
 
   function ensureAgentBubble() {
-    if (currentAgentEl) return;
-    currentAgentEl = document.createElement("div");
-    currentAgentEl.className = "msg agent";
-    currentAgentEl.innerHTML = `
-      <div class="role">
-        <span>Grok</span>
-        <button class="copy-btn" type="button" data-copy>复制</button>
-      </div>
-      <button type="button" class="think-toggle" style="display:none">
-        <span class="chev">▶</span>
-        <span class="think-label">展开思考过程</span>
-      </button>
-      <div class="thought"></div>
-      <div class="body markdown"></div>`;
-    currentThinkToggle = currentAgentEl.querySelector(".think-toggle");
-    currentThoughtEl = currentAgentEl.querySelector(".thought");
-    currentAgentBody = currentAgentEl.querySelector(".body");
-    agentBuf = "";
-    thoughtBuf = "";
-    wireCopy(currentAgentEl, () => agentBuf);
-    currentThinkToggle.addEventListener("click", () => {
-      const open = currentThoughtEl.classList.toggle("open");
-      currentThinkToggle.querySelector(".chev").textContent = open ? "▼" : "▶";
-      currentThinkToggle.querySelector(".think-label").textContent = open
-        ? "收起思考过程"
-        : "展开思考过程";
-    });
-    messagesEl.appendChild(currentAgentEl);
+    if (currentTurn) return;
+    const el = document.createElement("div");
+    el.className = "msg agent";
+    el.innerHTML = agentShellHtml();
+    const body = el.querySelector(".body");
+    const toggle = el.querySelector(".work-toggle");
+    const panel = el.querySelector(".work-panel");
+    const thoughtBlock = el.querySelector(".thought-block");
+    const toolsBlock = el.querySelector(".tools-block");
+
+    const turn = {
+      el,
+      body,
+      toggle,
+      panel,
+      thoughtBlock,
+      toolsBlock,
+      agentText: "",
+      thoughtText: "",
+      toolCount: 0,
+    };
+    // Bind once with closures over THIS turn's nodes (not globals)
+    wireWorkToggle(toggle, panel, () =>
+      workSummary(turn.thoughtText, turn.toolCount)
+    );
+    wireCopy(el, () => turn.agentText);
+    currentTurn = turn;
+    messagesEl.appendChild(el);
   }
 
   function finishAgentBubble() {
-    if (currentThinkToggle && thoughtBuf.trim()) {
-      currentThinkToggle.style.display = "inline-flex";
-      currentThoughtEl.classList.remove("open");
-      currentThoughtEl.textContent = thoughtBuf;
-      currentThinkToggle.querySelector(".chev").textContent = "▶";
-      currentThinkToggle.querySelector(".think-label").textContent = "展开思考过程";
-    } else if (currentThinkToggle) {
-      currentThinkToggle.style.display = "none";
-    }
-    currentAgentEl = null;
-    currentAgentBody = null;
-    currentThoughtEl = null;
-    currentThinkToggle = null;
-    agentBuf = "";
-    thoughtBuf = "";
+    if (!currentTurn) return;
+    // finalize chrome; leave panel collapsed
+    currentTurn.panel.classList.remove("open");
+    currentTurn.toggle.setAttribute("aria-expanded", "false");
+    currentTurn.toggle.querySelector(".chev").textContent = "▶";
+    refreshTurnChrome(currentTurn);
+    currentTurn = null;
   }
 
   function wireCopy(el, getText) {
@@ -328,34 +377,30 @@
     });
   }
 
-  function addTool(update) {
-    const el = document.createElement("div");
-    el.className = "msg tool";
-    el.innerHTML = `
-      <div class="tool-line">
-        <span class="kind">${escapeHtml(update.kind || "tool")}</span>
-        <span class="title">${escapeHtml(update.title || update.toolCallId || "tool")}</span>
-        <span class="status">${escapeHtml(update.status || "")}</span>
-      </div>`;
-    el.dataset.toolId = update.toolCallId || "";
-    messagesEl.appendChild(el);
+  /** Tools go inside current turn's work panel (hidden until expanded). */
+  function upsertTurnTool(update) {
+    ensureAgentBubble();
+    const turn = currentTurn;
+    const id = update.toolCallId || `t-${turn.toolCount}`;
+    let row = turn.toolsBlock.querySelector(`[data-tool-id="${CSS.escape(id)}"]`);
+    if (!row) {
+      row = document.createElement("div");
+      row.className = "work-tool";
+      row.dataset.toolId = id;
+      row.innerHTML = `<span class="kind"></span><span class="title"></span><span class="status"></span>`;
+      turn.toolsBlock.appendChild(row);
+      turn.toolCount += 1;
+    }
+    const kind = row.querySelector(".kind");
+    const title = row.querySelector(".title");
+    const status = row.querySelector(".status");
+    if (update.kind) kind.textContent = update.kind;
+    else if (!kind.textContent) kind.textContent = "tool";
+    if (update.title) title.textContent = update.title;
+    else if (!title.textContent) title.textContent = id;
+    if (update.status) status.textContent = update.status;
+    refreshTurnChrome(turn);
     scrollBottom();
-    return el;
-  }
-
-  function updateTool(update) {
-    if (!update.toolCallId) {
-      addTool(update);
-      return;
-    }
-    let el = messagesEl.querySelector(`.msg.tool[data-tool-id="${CSS.escape(update.toolCallId)}"]`);
-    if (!el) el = addTool(update);
-    const status = el.querySelector(".status");
-    if (update.status && status) status.textContent = update.status;
-    if (update.title) {
-      const t = el.querySelector(".title");
-      if (t) t.textContent = update.title;
-    }
   }
 
   function setBusy(v) {
@@ -376,8 +421,7 @@
   function clearChatUI() {
     finishAgentBubble();
     messagesEl.innerHTML = "";
-    agentBuf = "";
-    thoughtBuf = "";
+    currentTurn = null;
   }
 
   // ── File cite ─────────────────────────────────────────────────
@@ -644,29 +688,29 @@
 
   function handleSessionUpdate(update) {
     const kind = update.sessionUpdate;
-    // When opening conversation we already rendered from disk; ignore ACP history replay
-    // to avoid duplicates. Only stream live chunks when busy (active turn).
-    if (!busy && (kind === "user_message_chunk" || kind === "agent_message_chunk" || kind === "agent_thought_chunk")) {
+    // History already rendered from disk; only stream live when busy.
+    if (
+      !busy &&
+      (kind === "user_message_chunk" ||
+        kind === "agent_message_chunk" ||
+        kind === "agent_thought_chunk" ||
+        kind === "tool_call" ||
+        kind === "tool_call_update")
+    ) {
       return;
     }
     if (kind === "agent_message_chunk") {
       ensureAgentBubble();
-      agentBuf += (update.content && update.content.text) || "";
-      currentAgentBody.innerHTML = renderMarkdown(agentBuf);
+      currentTurn.agentText += (update.content && update.content.text) || "";
+      currentTurn.body.innerHTML = renderMarkdown(currentTurn.agentText);
       scrollBottom();
     } else if (kind === "agent_thought_chunk") {
       ensureAgentBubble();
-      thoughtBuf += (update.content && update.content.text) || "";
-      if (currentThinkToggle && thoughtBuf.trim()) {
-        currentThinkToggle.style.display = "inline-flex";
-        if (currentThoughtEl) currentThoughtEl.textContent = thoughtBuf;
-      }
+      currentTurn.thoughtText += (update.content && update.content.text) || "";
+      refreshTurnChrome(currentTurn);
       scrollBottom();
-    } else if (kind === "tool_call") {
-      finishAgentBubble();
-      addTool(update);
-    } else if (kind === "tool_call_update") {
-      updateTool(update);
+    } else if (kind === "tool_call" || kind === "tool_call_update") {
+      upsertTurnTool(update);
     }
   }
 
@@ -722,6 +766,12 @@
     chatRailOpen = !chatRailOpen;
     applyLayout();
   });
+  if (chatRailClose) {
+    chatRailClose.addEventListener("click", () => {
+      chatRailOpen = false;
+      applyLayout();
+    });
+  }
   sidebarClose.addEventListener("click", () => {
     sidebarOpen = false;
     applyLayout();

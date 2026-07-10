@@ -55,9 +55,13 @@ html, body {
   pointer-events: none;
   overflow: hidden;
   border: none;
+  min-width: 0;
+  width: 0;
+  padding: 0;
+  margin: 0;
 }
 
-/* Left local chat list */
+/* Left local chat list — same collapsible pattern as right sidebar */
 .chat-rail {
   border-right: 1px solid var(--border);
   background: #0e1118;
@@ -74,6 +78,11 @@ html, body {
   gap: 8px;
   padding: 12px 10px 8px;
   border-bottom: 1px solid var(--border);
+}
+.chat-rail-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 .chat-list {
   flex: 1;
@@ -128,37 +137,93 @@ html, body {
   line-height: 1.35;
 }
 
-/* Collapsed thinking (web-like) */
-.think-toggle {
-  display: inline-flex;
+/*
+ * Per-message work process (Cursor / Claude-like):
+ * one toggle owns THIS message's thought + tools only.
+ * Default collapsed — final answer stays visible.
+ */
+.work-toggle {
+  display: none; /* shown via JS when there is thought/tools */
   align-items: center;
   gap: 6px;
   border: 1px solid var(--border);
   background: rgba(255,255,255,0.03);
   color: var(--muted);
   border-radius: 999px;
-  padding: 4px 10px;
+  padding: 4px 12px;
   font-size: 12px;
   cursor: pointer;
-  margin-bottom: 10px;
+  margin: 0 0 10px;
+  max-width: 100%;
 }
-.think-toggle:hover {
+.work-toggle.visible { display: inline-flex; }
+.work-toggle:hover {
   border-color: var(--accent-dim);
   color: var(--text);
 }
-.think-toggle .chev { font-size: 10px; opacity: 0.8; }
-.msg .thought {
-  color: var(--thought);
-  font-size: 12.5px;
-  border-left: 2px solid #333;
-  padding: 8px 0 8px 10px;
-  margin: 0 0 10px;
-  white-space: pre-wrap;
+.work-toggle .chev { font-size: 10px; opacity: 0.8; flex-shrink: 0; }
+.work-toggle .work-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Hidden unless .open on THIS panel */
+.work-panel {
   display: none;
-  max-height: 320px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #0a0c10;
+  max-height: 360px;
   overflow-y: auto;
 }
-.msg .thought.open { display: block; }
+.work-panel.open {
+  display: block;
+}
+.work-panel .thought-block {
+  color: var(--thought);
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.45;
+}
+.work-panel .thought-block:empty { display: none; }
+.work-panel .tools-block {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.work-panel .tools-block:empty { display: none; margin: 0; }
+.work-panel .thought-block:not(:empty) + .tools-block:not(:empty) {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+.work-tool {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.work-tool .kind {
+  color: var(--accent);
+  text-transform: uppercase;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+.work-tool .title { color: var(--text); flex: 1; min-width: 0; word-break: break-all; }
+.work-tool .status { color: var(--muted); flex-shrink: 0; }
+
+/* Legacy standalone tool msgs (should not appear for live turns) */
+.msg.tool { display: none; }
 
 #mainCol {
   display: grid;
