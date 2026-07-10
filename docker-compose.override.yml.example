@@ -1,0 +1,17 @@
+# Copy to docker-compose.override.yml (gitignored) to pin this to your own
+# Docker setup instead of the portable defaults in docker-compose.yml.
+services:
+  grok-chat-web:
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "2m"
+        max-file: "1"
+    dns:
+      - 172.20.0.53   # your DNS server, e.g. a local AdGuard/Pi-hole
+
+networks:
+  default:
+    name: your-existing-docker-network
+    external: true
