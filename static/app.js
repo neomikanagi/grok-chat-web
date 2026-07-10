@@ -1,7 +1,6 @@
-/* Grok Chat Web v4 — Enter send, collapsed thinking, local chats only */
+/* Grok Chat Web v5 — server-side (this machine) conversations */
 (() => {
   const $ = (id) => document.getElementById(id);
-  const STORE_KEY = "gcw_local_chats_v1";
 
   const appEl = $("app");
   const messagesEl = $("messages");
@@ -32,7 +31,8 @@
   const pickerList = $("pickerList");
 
   let ws = null;
-  let sessionId = null;
+  let sessionId = null; // ACP session id
+  let conversationId = null; // server store id
   let cwd = "";
   let browsePath = "";
   let browseParent = null;
@@ -41,10 +41,11 @@
   let reconnectTimer = null;
   let sidebarOpen = localStorage.getItem("gcw_sidebar") !== "0";
   let chatRailOpen = localStorage.getItem("gcw_chat_rail") !== "0";
-  let replaying = false; // session/load history
   let selected = null;
 
-  // Streaming agent bubble
+  /** @type {Array<{id,title,cwd,updatedAt,messageCount}>} */
+  let convItems = [];
+
   let currentAgentEl = null;
   let currentAgentBody = null;
   let currentThoughtEl = null;
@@ -59,157 +60,8 @@
   let acTimer = null;
   let pickerCwd = "";
   let pickerParent = null;
+  let suppressUserEcho = false;
 
-  // ── Local conversation store (browser only; never list cloud) ──
-  function loadStore() {
-    try {
-      const raw = localStorage.getItem(STORE_KEY);
-      if (!raw) return { items: [], activeId: null };
-      const data = JSON.parse(raw);
-      return {
-        items: Array.isArray(data.items) ? data.items : [],
-        activeId: data.activeId || null,
-      };
-    } catch {
-      return { items: [], activeId: null };
-    }
-  }
-
-  function saveStore(store) {
-    localStorage.setItem(
-      STORE_KEY,
-      JSON.stringify({ items: store.items, activeId: store.activeId })
-    );
-  }
-
-  let store = loadStore();
-
-  function upsertLocalChat({ id, title, cwd: c, touch }) {
-    if (!id) return;
-    const now = Date.now();
-    let item = store.items.find((x) => x.id === id);
-    if (!item) {
-      item = {
-        id,
-        title: title || "新对话",
-        cwd: c || cwd || "",
-        createdAt: now,
-        updatedAt: now,
-      };
-      store.items.unshift(item);
-    } else {
-      if (title) item.title = title;
-      if (c) item.cwd = c;
-      if (touch !== false) item.updatedAt = now;
-    }
-    store.activeId = id;
-    // sort newest first
-    store.items.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-    saveStore(store);
-    renderChatList();
-  }
-
-  function removeLocalChat(id) {
-    store.items = store.items.filter((x) => x.id !== id);
-    if (store.activeId === id) store.activeId = null;
-    saveStore(store);
-    renderChatList();
-  }
-
-  function renderChatList() {
-    if (!store.items.length) {
-      chatListEl.innerHTML = `<div class="chat-item" style="cursor:default;opacity:.7">
-        <div class="title">暂无本地对话</div>
-        <div class="meta">点上方「新对话」开始</div>
-      </div>`;
-      return;
-    }
-    chatListEl.innerHTML = store.items
-      .map((it) => {
-        const active = it.id === store.activeId ? "active" : "";
-        const when = it.updatedAt
-          ? new Date(it.updatedAt).toLocaleString(undefined, {
-              month: "numeric",
-              day: "numeric",
-              hour: "2-digit",
-              minute: "2-digit",
-            })
-          : "";
-        return `<div class="chat-item ${active}" data-id="${escapeHtml(it.id)}">
-          <div class="title" title="${escapeHtml(it.title || "")}">${escapeHtml(it.title || "未命名")}</div>
-          <div class="meta">${escapeHtml(when)} · ${escapeHtml(shortPath(it.cwd || ""))}</div>
-          <div class="ops">
-            <button type="button" class="ghost-btn small" data-act="enter">进入</button>
-            <button type="button" class="ghost-btn small danger" data-act="del">删除</button>
-          </div>
-        </div>`;
-      })
-      .join("");
-
-    chatListEl.querySelectorAll(".chat-item[data-id]").forEach((el) => {
-      const id = el.dataset.id;
-      el.querySelector('[data-act="enter"]').addEventListener("click", (e) => {
-        e.stopPropagation();
-        enterChat(id);
-      });
-      el.querySelector('[data-act="del"]').addEventListener("click", (e) => {
-        e.stopPropagation();
-        deleteChat(id);
-      });
-      el.addEventListener("click", (e) => {
-        if (e.target.closest("button")) return;
-        enterChat(id);
-      });
-    });
-  }
-
-  function enterChat(id) {
-    const item = store.items.find((x) => x.id === id);
-    if (!item) return;
-    if (busy) {
-      addSystem("请先停止当前任务再切换对话。");
-      return;
-    }
-    if (item.id === sessionId && item.id === store.activeId) {
-      // already active — still re-render highlight
-      store.activeId = id;
-      saveStore(store);
-      renderChatList();
-      return;
-    }
-    clearChatUI();
-    store.activeId = id;
-    saveStore(store);
-    renderChatList();
-    addSystem("正在进入本地对话…");
-    wsSend({ type: "load_session", sessionId: id, cwd: item.cwd || cwd || homePath });
-  }
-
-  function deleteChat(id) {
-    const item = store.items.find((x) => x.id === id);
-    if (!item) return;
-    if (!confirm(`删除本地对话「${item.title || "未命名"}」？\n仅从本机列表移除，不会列出或同步云端。`)) {
-      return;
-    }
-    const wasActive = sessionId === id || store.activeId === id;
-    removeLocalChat(id);
-    if (wasActive) {
-      // start a fresh local chat
-      startNewChat();
-    }
-  }
-
-  function startNewChat() {
-    if (busy) {
-      addSystem("请先停止当前任务。");
-      return;
-    }
-    clearChatUI();
-    addSystem("正在创建新对话…");
-    wsSend({ type: "new_session", cwd: cwd || homePath || undefined });
-  }
-
-  // ── Layout toggles ────────────────────────────────────────────
   function applyLayout() {
     appEl.classList.toggle("sidebar-collapsed", !sidebarOpen);
     appEl.classList.toggle("chat-rail-collapsed", !chatRailOpen);
@@ -218,7 +70,6 @@
     localStorage.setItem("gcw_chat_rail", chatRailOpen ? "1" : "0");
   }
   applyLayout();
-  renderChatList();
 
   function setStatus(text, mode) {
     statusText.textContent = text;
@@ -243,7 +94,7 @@
     return p;
   }
   function renderMarkdown(text) {
-    const escaped = escapeHtml(text);
+    const escaped = escapeHtml(text || "");
     let html = escaped.replace(/```([\w-]*)\n([\s\S]*?)```/g, (_, lang, code) => {
       return `<pre><code class="lang-${lang || "text"}">${code.replace(/\n$/, "")}</code></pre>`;
     });
@@ -259,6 +110,79 @@
           .join("");
       })
       .join("");
+  }
+
+  // ── Server conversation list ──────────────────────────────────
+  function renderChatList() {
+    if (!convItems.length) {
+      chatListEl.innerHTML = `<div class="chat-item" style="cursor:default;opacity:.7">
+        <div class="title">本机暂无对话</div>
+        <div class="meta">点「新对话」开始（存于服务器磁盘）</div>
+      </div>`;
+      return;
+    }
+    chatListEl.innerHTML = convItems
+      .map((it) => {
+        const active = it.id === conversationId ? "active" : "";
+        const when = it.updatedAt
+          ? new Date(it.updatedAt).toLocaleString(undefined, {
+              month: "numeric",
+              day: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+            })
+          : "";
+        const n = it.messageCount != null ? `${it.messageCount} 条` : "";
+        return `<div class="chat-item ${active}" data-id="${escapeHtml(it.id)}">
+          <div class="title" title="${escapeHtml(it.title || "")}">${escapeHtml(it.title || "未命名")}</div>
+          <div class="meta">${escapeHtml(when)}${n ? " · " + n : ""} · ${escapeHtml(shortPath(it.cwd || ""))}</div>
+          <div class="ops">
+            <button type="button" class="ghost-btn small" data-act="enter">进入</button>
+            <button type="button" class="ghost-btn small danger" data-act="del">删除</button>
+          </div>
+        </div>`;
+      })
+      .join("");
+
+    chatListEl.querySelectorAll(".chat-item[data-id]").forEach((el) => {
+      const id = el.dataset.id;
+      el.querySelector('[data-act="enter"]').addEventListener("click", (e) => {
+        e.stopPropagation();
+        openConversation(id);
+      });
+      el.querySelector('[data-act="del"]').addEventListener("click", (e) => {
+        e.stopPropagation();
+        deleteConversation(id);
+      });
+      el.addEventListener("click", (e) => {
+        if (e.target.closest("button")) return;
+        openConversation(id);
+      });
+    });
+  }
+
+  function openConversation(id) {
+    if (!id || busy) {
+      if (busy) addSystem("请先停止当前任务再切换对话。");
+      return;
+    }
+    if (id === conversationId) return;
+    wsSend({ type: "open_conversation", conversationId: id });
+  }
+
+  function deleteConversation(id) {
+    const item = convItems.find((x) => x.id === id);
+    if (!item) return;
+    if (!confirm(`删除本机对话「${item.title || "未命名"}」？\n记录在服务器上删除，不可恢复。`)) return;
+    wsSend({ type: "delete_conversation", conversationId: id });
+  }
+
+  function startNewChat() {
+    if (busy) {
+      addSystem("请先停止当前任务。");
+      return;
+    }
+    wsSend({ type: "new_session", cwd: cwd || homePath || undefined });
   }
 
   function addSystem(text) {
@@ -282,14 +206,50 @@
     wireCopy(el, text);
     messagesEl.appendChild(el);
     scrollBottom();
-    // title from first user message
-    if (sessionId) {
-      const item = store.items.find((x) => x.id === sessionId);
-      if (!item || !item.title || item.title === "新对话") {
-        const t = text.trim().replace(/\s+/g, " ").slice(0, 40);
-        upsertLocalChat({ id: sessionId, title: t || "新对话", cwd, touch: true });
-      } else {
-        upsertLocalChat({ id: sessionId, cwd, touch: true });
+  }
+
+  function addAssistantStatic(content, thought) {
+    const el = document.createElement("div");
+    el.className = "msg agent";
+    el.innerHTML = `
+      <div class="role">
+        <span>Grok</span>
+        <button class="copy-btn" type="button" data-copy>复制</button>
+      </div>
+      <button type="button" class="think-toggle" style="display:none">
+        <span class="chev">▶</span>
+        <span class="think-label">展开思考过程</span>
+      </button>
+      <div class="thought"></div>
+      <div class="body markdown"></div>`;
+    const body = el.querySelector(".body");
+    const thoughtEl = el.querySelector(".thought");
+    const toggle = el.querySelector(".think-toggle");
+    body.innerHTML = renderMarkdown(content || "");
+    wireCopy(el, content || "");
+    if (thought && thought.trim()) {
+      thoughtEl.textContent = thought;
+      toggle.style.display = "inline-flex";
+      toggle.addEventListener("click", () => {
+        const open = thoughtEl.classList.toggle("open");
+        toggle.querySelector(".chev").textContent = open ? "▼" : "▶";
+        toggle.querySelector(".think-label").textContent = open
+          ? "收起思考过程"
+          : "展开思考过程";
+      });
+    }
+    messagesEl.appendChild(el);
+    scrollBottom();
+  }
+
+  function renderStoredMessages(messages) {
+    clearChatUI();
+    for (const m of messages || []) {
+      if (m.role === "user") addUser(m.content || "");
+      else if (m.role === "assistant") addAssistantStatic(m.content || "", m.thought || "");
+      else if (m.role === "system") addSystem(m.content || "");
+      else if (m.role === "tool") {
+        addTool({ title: m.content || "tool", kind: "tool", status: "" });
       }
     }
   }
@@ -315,7 +275,6 @@
     agentBuf = "";
     thoughtBuf = "";
     wireCopy(currentAgentEl, () => agentBuf);
-
     currentThinkToggle.addEventListener("click", () => {
       const open = currentThoughtEl.classList.toggle("open");
       currentThinkToggle.querySelector(".chev").textContent = open ? "▼" : "▶";
@@ -323,15 +282,12 @@
         ? "收起思考过程"
         : "展开思考过程";
     });
-
     messagesEl.appendChild(currentAgentEl);
   }
 
   function finishAgentBubble() {
-    // keep bubble as history; just detach streaming pointers
     if (currentThinkToggle && thoughtBuf.trim()) {
       currentThinkToggle.style.display = "inline-flex";
-      // stay collapsed by default
       currentThoughtEl.classList.remove("open");
       currentThoughtEl.textContent = thoughtBuf;
       currentThinkToggle.querySelector(".chev").textContent = "▶";
@@ -410,16 +366,13 @@
     if (v) setStatus("working…", "busy");
     else if (ws && ws.readyState === WebSocket.OPEN) setStatus(statusLine(), "ok");
   }
-
   function statusLine() {
     return cwd ? shortPath(cwd) : "connected";
   }
-
   function updateCwdBtn() {
     cwdBtn.textContent = "项目根：" + (cwd ? shortPath(cwd) : "…");
     cwdBtn.title = cwd ? "项目根\n" + cwd : "设置项目根";
   }
-
   function clearChatUI() {
     finishAgentBubble();
     messagesEl.innerHTML = "";
@@ -427,7 +380,7 @@
     thoughtBuf = "";
   }
 
-  // ── Selection / 引用 ──────────────────────────────────────────
+  // ── File cite ─────────────────────────────────────────────────
   function setSelected(entry) {
     selected = entry
       ? { path: entry.path, name: entry.name, is_dir: !!entry.is_dir }
@@ -437,7 +390,6 @@
       row.classList.toggle("selected", !!(selected && row.dataset.path === selected.path));
     });
   }
-
   function updateAttachBar() {
     if (!selected) {
       attachBar.classList.add("idle");
@@ -454,7 +406,6 @@
     attachBtn.disabled = false;
     attachBtn.textContent = selected.is_dir ? "引用此文件夹" : "引用";
   }
-
   function citeSelected() {
     if (!selected) return;
     const path = selected.path + (selected.is_dir ? "/" : "");
@@ -466,7 +417,6 @@
     }, 1000);
     inputEl.focus();
   }
-
   function insertPath(path) {
     const start = inputEl.selectionStart ?? inputEl.value.length;
     const end = inputEl.selectionEnd ?? start;
@@ -499,7 +449,6 @@
       addSystem("列目录失败：" + e);
     }
   }
-
   function renderSideList(entries) {
     const rows = [];
     for (const e of entries) {
@@ -525,14 +474,11 @@
         if (entry.is_dir) {
           setSelected(entry);
           loadSideList(entry.path);
-        } else {
-          setSelected(entry);
-        }
+        } else setSelected(entry);
       });
     });
   }
 
-  // Project root modal
   async function openPicker(startPath) {
     picker.classList.add("open");
     await loadPicker(startPath || cwd || homePath || "/");
@@ -564,12 +510,9 @@
     const up = pickerList.querySelector("[data-up]");
     if (up) up.addEventListener("click", () => pickerParent && loadPicker(pickerParent));
   }
-
-  function useProjectRoot(path) {
-    const p = path || pickerCwd;
-    if (!p || busy) return;
-    clearChatUI();
-    wsSend({ type: "set_cwd", cwd: p }); // creates new session
+  function useProjectRoot() {
+    if (!pickerCwd || busy) return;
+    wsSend({ type: "set_cwd", cwd: pickerCwd });
     closePicker();
   }
 
@@ -599,61 +542,78 @@
     switch (msg.type) {
       case "hello": {
         sessionId = msg.sessionId;
+        conversationId = msg.conversationId || msg.activeId || null;
         cwd = msg.cwd || "";
+        convItems = msg.conversations || [];
         updateCwdBtn();
+        renderChatList();
         const auth = msg.auth || {};
         const init = msg.init || {};
         const who = auth.email || "not signed in";
         const model = init.currentModelId || "";
         setStatus(`${who}${model ? " · " + model : ""}`, auth.ok === false ? "err" : "ok");
         loadSideList(cwd || homePath || "/");
-
-        // If we have local chats, prefer restoring active; else register current session as local
-        if (store.activeId && store.items.some((x) => x.id === store.activeId)) {
-          // Don't auto-load on every reconnect if already same id
-          if (store.activeId !== sessionId) {
-            enterChat(store.activeId);
-          } else {
-            upsertLocalChat({ id: sessionId, cwd, touch: false });
-          }
-        } else if (sessionId) {
-          upsertLocalChat({ id: sessionId, title: "新对话", cwd, touch: false });
+        // Load active conversation transcript from server
+        if (conversationId) {
+          fetch(`/api/conversations/${encodeURIComponent(conversationId)}`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data) => {
+              if (data && data.messages && data.messages.length) {
+                renderStoredMessages(data.messages);
+              }
+            })
+            .catch(() => {});
         }
+        break;
+      }
+      case "conversations":
+        convItems = msg.items || [];
+        if (msg.activeId) conversationId = msg.activeId;
         renderChatList();
+        break;
+      case "conversation_open": {
+        const c = msg.conversation || {};
+        conversationId = c.id;
+        cwd = c.cwd || cwd;
+        if (c.acpSessionId) sessionId = c.acpSessionId;
+        updateCwdBtn();
+        // Don't double-add streaming later; history is the source
+        renderStoredMessages(c.messages || []);
+        renderChatList();
+        if (cwd) loadSideList(cwd);
         break;
       }
       case "session":
         sessionId = msg.sessionId;
+        if (msg.conversationId) conversationId = msg.conversationId;
         cwd = msg.cwd || cwd;
         updateCwdBtn();
         if (msg.fresh) {
-          upsertLocalChat({
-            id: sessionId,
-            title: "新对话",
-            cwd,
-            touch: true,
-          });
-          // if replacedFrom, drop dead id
-          if (msg.replacedFrom) {
-            removeLocalChat(msg.replacedFrom);
-            upsertLocalChat({ id: sessionId, title: "新对话", cwd, touch: true });
-          }
-        } else if (msg.loaded) {
-          upsertLocalChat({ id: sessionId, cwd, touch: true });
-        } else {
-          upsertLocalChat({ id: sessionId, cwd, touch: false });
+          clearChatUI();
+          addSystem("新对话已创建（保存在本机服务器）");
+        }
+        if (msg.acpReset) {
+          addSystem(msg.message || "Agent 会话已重建；历史来自本机记录");
         }
         setStatus(statusLine(), "ok");
         break;
       case "session_load_start":
-        replaying = true;
-        clearChatUI();
-        addSystem("正在加载本地对话历史…");
+        // conversation_open will fill messages
         break;
       case "session_load_end":
-        replaying = false;
         finishAgentBubble();
-        addSystem("已进入该对话。");
+        break;
+      case "user":
+        // server echo — UI already added on send, skip unless from another client
+        if (!suppressUserEcho) {
+          // only add if last message isn't the same user text
+          const last = messagesEl.lastElementChild;
+          const lastText = last && last.classList.contains("user")
+            ? last.querySelector(".body")?.textContent
+            : null;
+          if (lastText !== msg.text) addUser(msg.text);
+        }
+        suppressUserEcho = false;
         break;
       case "session_update":
         handleSessionUpdate(msg.update || {});
@@ -665,12 +625,10 @@
       case "turn_end":
         setBusy(false);
         finishAgentBubble();
-        if (sessionId) upsertLocalChat({ id: sessionId, cwd, touch: true });
         break;
       case "error":
         addSystem("错误：" + (msg.message || "unknown"));
         setBusy(false);
-        replaying = false;
         break;
       case "permission":
         showPermission(msg);
@@ -686,34 +644,21 @@
 
   function handleSessionUpdate(update) {
     const kind = update.sessionUpdate;
-    if (kind === "user_message_chunk") {
-      // history replay
-      const t = (update.content && update.content.text) || "";
-      if (t) {
-        // coalesce consecutive user chunks into one bubble when replaying is hard;
-        // simple approach: each chunk as append to last user or new
-        const last = messagesEl.lastElementChild;
-        if (last && last.classList.contains("user") && replaying) {
-          const body = last.querySelector(".body");
-          body.textContent = (body.textContent || "") + t;
-        } else {
-          addUser(t);
-        }
-      }
-    } else if (kind === "agent_message_chunk") {
+    // When opening conversation we already rendered from disk; ignore ACP history replay
+    // to avoid duplicates. Only stream live chunks when busy (active turn).
+    if (!busy && (kind === "user_message_chunk" || kind === "agent_message_chunk" || kind === "agent_thought_chunk")) {
+      return;
+    }
+    if (kind === "agent_message_chunk") {
       ensureAgentBubble();
-      const t = (update.content && update.content.text) || "";
-      agentBuf += t;
+      agentBuf += (update.content && update.content.text) || "";
       currentAgentBody.innerHTML = renderMarkdown(agentBuf);
       scrollBottom();
     } else if (kind === "agent_thought_chunk") {
       ensureAgentBubble();
-      const t = (update.content && update.content.text) || "";
-      thoughtBuf += t;
-      // while streaming: keep collapsed, but show toggle once we have content
+      thoughtBuf += (update.content && update.content.text) || "";
       if (currentThinkToggle && thoughtBuf.trim()) {
         currentThinkToggle.style.display = "inline-flex";
-        // only update hidden thought buffer text; don't open
         if (currentThoughtEl) currentThoughtEl.textContent = thoughtBuf;
       }
       scrollBottom();
@@ -757,6 +702,7 @@
   function send() {
     const text = inputEl.value;
     if (!text.trim() || busy) return;
+    suppressUserEcho = true;
     addUser(text);
     wsSend({ type: "prompt", text, sessionId });
     inputEl.value = "";
@@ -764,12 +710,10 @@
     closeAc();
   }
 
-  // ── Events ────────────────────────────────────────────────────
   sendBtn.addEventListener("click", send);
   cancelBtn.addEventListener("click", () => wsSend({ type: "cancel", sessionId }));
   newChatBtn.addEventListener("click", startNewChat);
   attachBtn.addEventListener("click", citeSelected);
-
   toggleSidebar.addEventListener("click", () => {
     sidebarOpen = !sidebarOpen;
     applyLayout();
@@ -785,16 +729,14 @@
   sideUp.addEventListener("click", () => browseParent && loadSideList(browseParent));
   sideRefresh.addEventListener("click", () => loadSideList(browsePath));
   sideToProject.addEventListener("click", () => loadSideList(cwd || homePath || "/"));
-
   cwdBtn.addEventListener("click", () => openPicker(cwd));
   $("pickerClose").addEventListener("click", closePicker);
-  $("pickerUse").addEventListener("click", () => useProjectRoot());
+  $("pickerUse").addEventListener("click", useProjectRoot);
   $("pickerUp").addEventListener("click", () => pickerParent && loadPicker(pickerParent));
   picker.addEventListener("click", (e) => {
     if (e.target === picker) closePicker();
   });
 
-  // Enter = send, Shift+Enter = newline
   inputEl.addEventListener("keydown", (e) => {
     if (acActive) {
       if (e.key === "ArrowDown") {
@@ -824,9 +766,7 @@
       e.preventDefault();
       send();
     }
-    // Shift+Enter: default textarea newline
   });
-
   inputEl.addEventListener("input", () => {
     inputEl.style.height = "auto";
     inputEl.style.height = Math.min(inputEl.scrollHeight, 280) + "px";
@@ -845,7 +785,6 @@
     clearTimeout(acTimer);
     acTimer = setTimeout(() => fetchAc(m[1] || ""), 120);
   }
-
   async function fetchAc(q) {
     try {
       const url = q
@@ -862,7 +801,6 @@
       closeAc();
     }
   }
-
   function renderAc() {
     if (!acActive || !acItems.length) {
       acEl.classList.remove("open");
@@ -887,7 +825,6 @@
       });
     });
   }
-
   function pickAc(i) {
     const it = acItems[i];
     if (!it) return;
@@ -902,7 +839,6 @@
     inputEl.focus();
     closeAc();
   }
-
   function closeAc() {
     acActive = false;
     acItems = [];
@@ -911,6 +847,7 @@
   }
 
   updateAttachBar();
+  // Update foot text in HTML via first system line
   fetch("/api/defaults")
     .then((r) => r.json())
     .then((d) => {
@@ -918,7 +855,7 @@
     })
     .catch(() => {})
     .finally(() => {
-      addSystem("Enter 发送 · Shift+Enter 换行 · 思考默认折叠 · 左侧仅本地对话（进入/删除）");
+      addSystem("对话存在本机服务器磁盘（非浏览器缓存）。左侧列表换浏览器也能看到。");
       connect();
     });
 })();

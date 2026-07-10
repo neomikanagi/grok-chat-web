@@ -1,4 +1,4 @@
-"""FastAPI server: static UI + REST for paths + WebSocket chat bridge."""
+"""FastAPI server: static UI + REST + WebSocket; conversations on server disk."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.acp_bridge import ACPBridge, default_cwd
+from app.conversations import store as conv_store
 
 logging.basicConfig(
     level=os.environ.get("GROK_CHAT_LOG", "INFO"),
@@ -26,7 +27,7 @@ logger = logging.getLogger("grok_chat")
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
 
-app = FastAPI(title="Grok Chat Web", version="0.1.0")
+app = FastAPI(title="Grok Chat Web", version="0.2.0")
 
 bridge = ACPBridge(
     grok_bin=os.environ.get("GROK_BIN", "grok"),
@@ -34,10 +35,15 @@ bridge = ACPBridge(
     always_approve=os.environ.get("GROK_CHAT_AUTO_APPROVE", "1") not in ("0", "false", "False"),
 )
 
-# WebSocket clients
 _clients: set[WebSocket] = set()
 _bridge_lock = asyncio.Lock()
-_bootstrapped = False
+
+# Active conversation id (our store id, not only ACP)
+_active_conv_id: Optional[str] = None
+
+# Streaming buffers for assistant turn persistence
+_turn_agent: str = ""
+_turn_thought: str = ""
 
 
 async def broadcast(event: dict[str, Any]) -> None:
@@ -53,28 +59,67 @@ async def broadcast(event: dict[str, Any]) -> None:
 
 
 async def on_bridge_event(event: dict[str, Any]) -> None:
+    global _turn_agent, _turn_thought
+    # Capture assistant stream for server-side history
+    if event.get("type") == "session_update":
+        update = event.get("update") or {}
+        kind = update.get("sessionUpdate")
+        if kind == "agent_message_chunk":
+            _turn_agent += (update.get("content") or {}).get("text") or ""
+        elif kind == "agent_thought_chunk":
+            _turn_thought += (update.get("content") or {}).get("text") or ""
     await broadcast(event)
+
+
+def _conv_payload(conv: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "conversations",
+        "items": conv_store.list(),
+        "activeId": conv_store.active_id or _active_conv_id,
+    }
+
+
+async def _broadcast_conv_list() -> None:
+    await broadcast(_conv_payload({}))
+
+
+def _ensure_active_conv(acp_id: Optional[str], cwd: str) -> str:
+    global _active_conv_id
+    if acp_id:
+        found = conv_store.find_by_acp(acp_id)
+        if found:
+            _active_conv_id = found["id"]
+            conv_store.active_id = found["id"]
+            return found["id"]
+    data = conv_store.create(cwd=cwd or default_cwd(), acp_session_id=acp_id)
+    _active_conv_id = data["id"]
+    return data["id"]
 
 
 @app.on_event("startup")
 async def startup() -> None:
     bridge.on_event(on_bridge_event)
-    # Lazy start on first WS connect is fine; also pre-warm if asked.
     if os.environ.get("GROK_CHAT_PREWARM", "1") not in ("0", "false", "False"):
         asyncio.create_task(_prewarm())
 
 
 async def _prewarm() -> None:
-    global _bootstrapped
+    global _active_conv_id
     try:
         async with _bridge_lock:
             await bridge.start()
             if not bridge.session_id:
                 await bridge.new_session(default_cwd())
-            _bootstrapped = True
-        logger.info("prewarm ok session=%s cwd=%s", bridge.session_id, bridge.cwd)
+            # Link or create a server conversation for the prewarm ACP session
+            _active_conv_id = _ensure_active_conv(bridge.session_id, bridge.cwd or default_cwd())
+        logger.info(
+            "prewarm ok conv=%s acp=%s cwd=%s",
+            _active_conv_id,
+            bridge.session_id,
+            bridge.cwd,
+        )
     except Exception:
-        logger.exception("prewarm failed (will retry on connect)")
+        logger.exception("prewarm failed")
 
 
 @app.on_event("shutdown")
@@ -86,54 +131,60 @@ class SessionBody(BaseModel):
     cwd: str = Field(..., description="Absolute working directory for the agent")
 
 
-class PromptBody(BaseModel):
-    text: str
-    session_id: Optional[str] = None
-
-
-class PermissionBody(BaseModel):
-    id: Any
-    option_id: str
-
-
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
     return {
         "ok": True,
         "agent_running": bridge._proc is not None and bridge._proc.returncode is None,
         "session_id": bridge.session_id,
+        "conversation_id": _active_conv_id,
         "cwd": bridge.cwd,
         "always_approve": bridge.always_approve,
         "auth": bridge._public_auth() if bridge.auth_meta else None,
         "init": bridge._public_init() if bridge.init_meta else None,
         "grok_bin": shutil.which(bridge.grok_bin) or bridge.grok_bin,
+        "conversations": len(conv_store.list()),
+        "data_dir": str(conv_store.root),
     }
 
 
 @app.get("/api/defaults")
 async def defaults() -> dict[str, Any]:
-    home = str(Path.home())
     return {
         "cwd": bridge.cwd or default_cwd(),
-        "home": home,
-        "send_key": "mod+enter",  # Cmd/Ctrl+Enter
-        "newline_key": "enter",
+        "home": str(Path.home()),
+        "send_key": "enter",
+        "newline_key": "shift+enter",
         "always_approve": bridge.always_approve,
     }
 
 
-@app.post("/api/session")
-async def create_session(body: SessionBody) -> dict[str, Any]:
-    try:
-        async with _bridge_lock:
-            await bridge.start()
-            sid = await bridge.new_session(body.cwd)
-        return {"sessionId": sid, "cwd": bridge.cwd}
-    except FileNotFoundError as e:
-        raise HTTPException(400, str(e)) from e
-    except Exception as e:
-        logger.exception("session create failed")
-        raise HTTPException(500, str(e)) from e
+@app.get("/api/conversations")
+async def api_list_conversations() -> dict[str, Any]:
+    return {
+        "items": conv_store.list(),
+        "activeId": conv_store.active_id or _active_conv_id,
+    }
+
+
+@app.get("/api/conversations/{conv_id}")
+async def api_get_conversation(conv_id: str) -> dict[str, Any]:
+    data = conv_store.get(conv_id)
+    if not data:
+        raise HTTPException(404, "conversation not found")
+    return data
+
+
+@app.delete("/api/conversations/{conv_id}")
+async def api_delete_conversation(conv_id: str) -> dict[str, Any]:
+    global _active_conv_id
+    ok = conv_store.delete(conv_id)
+    if not ok:
+        raise HTTPException(404, "conversation not found")
+    if _active_conv_id == conv_id:
+        _active_conv_id = None
+    await _broadcast_conv_list()
+    return {"ok": True, "id": conv_id}
 
 
 @app.get("/api/fs/list")
@@ -165,13 +216,7 @@ async def fs_list(
             is_dir = child.is_dir()
         except OSError:
             continue
-        entries.append(
-            {
-                "name": name,
-                "path": str(child),
-                "is_dir": is_dir,
-            }
-        )
+        entries.append({"name": name, "path": str(child), "is_dir": is_dir})
     parent = str(base.parent) if base.parent != base else None
     return {"path": str(base), "parent": parent, "entries": entries}
 
@@ -182,7 +227,6 @@ async def fs_search(
     root: Optional[str] = Query(None),
     limit: int = Query(40, ge=1, le=100),
 ) -> dict[str, Any]:
-    """Shallow fuzzy-ish search under root for @ autocomplete."""
     base = Path(root or bridge.cwd or default_cwd()).expanduser().resolve()
     if not base.is_dir():
         raise HTTPException(400, f"bad root: {base}")
@@ -190,7 +234,6 @@ async def fs_search(
     q_lower = q.lower().lstrip("@")
     hits: list[dict[str, Any]] = []
 
-    # Prefer direct children + one level deep; also match absolute path prefix.
     try:
         if q.startswith("/") or q.startswith("~"):
             p = Path(q).expanduser()
@@ -203,11 +246,7 @@ async def fs_search(
                     if child.name.startswith("."):
                         continue
                     hits.append(
-                        {
-                            "name": child.name,
-                            "path": str(child),
-                            "is_dir": child.is_dir(),
-                        }
+                        {"name": child.name, "path": str(child), "is_dir": child.is_dir()}
                     )
                     if len(hits) >= limit:
                         break
@@ -237,17 +276,127 @@ async def fs_search(
                 hits.append({"name": name, "path": str(child), "is_dir": is_dir, "rel": rel})
                 if len(hits) >= limit:
                     break
-            # Limit breadth: only recurse into dirs when query longer or few hits
             if is_dir and depth_guard < 2000 and (len(q_lower) >= 2 or child.parent == base):
-                # Don't dive into huge trees
                 if name not in ("node_modules", ".git", ".venv", "venv", "dist", "build", "target"):
                     stack.append(child)
 
     return {"query": q, "root": str(base), "entries": hits}
 
 
+async def _open_conversation(conv_id: str) -> None:
+    """Load server transcript to UI + resume ACP if possible."""
+    global _active_conv_id
+    data = conv_store.get(conv_id)
+    if not data:
+        await broadcast({"type": "error", "message": f"对话不存在: {conv_id}"})
+        return
+
+    _active_conv_id = conv_id
+    conv_store.active_id = conv_id
+    cwd = data.get("cwd") or default_cwd()
+    acp_id = data.get("acpSessionId")
+
+    await broadcast({"type": "session_load_start", "conversationId": conv_id, "cwd": cwd})
+    # Push stored messages immediately (source of truth for UI)
+    await broadcast(
+        {
+            "type": "conversation_open",
+            "conversation": {
+                "id": data["id"],
+                "title": data.get("title"),
+                "cwd": cwd,
+                "acpSessionId": acp_id,
+                "messages": data.get("messages") or [],
+            },
+        }
+    )
+
+    # Try ACP resume for agent memory; UI already has history even if this fails
+    if acp_id:
+        try:
+            await bridge.load_session(acp_id, cwd)
+            await broadcast(
+                {
+                    "type": "session",
+                    "sessionId": acp_id,
+                    "conversationId": conv_id,
+                    "cwd": cwd,
+                    "loaded": True,
+                }
+            )
+        except Exception as e:
+            logger.warning("ACP load failed for %s: %s — new session", acp_id, e)
+            try:
+                newsid = await bridge.new_session(cwd)
+                conv_store.bind_acp(conv_id, newsid, cwd)
+                await broadcast(
+                    {
+                        "type": "session",
+                        "sessionId": newsid,
+                        "conversationId": conv_id,
+                        "cwd": cwd,
+                        "fresh": False,
+                        "acpReset": True,
+                        "message": "Agent 侧会话已重建，界面历史来自本机记录",
+                    }
+                )
+            except Exception as e2:
+                await broadcast({"type": "error", "message": str(e2)})
+    else:
+        try:
+            newsid = await bridge.new_session(cwd)
+            conv_store.bind_acp(conv_id, newsid, cwd)
+            await broadcast(
+                {
+                    "type": "session",
+                    "sessionId": newsid,
+                    "conversationId": conv_id,
+                    "cwd": cwd,
+                    "fresh": False,
+                }
+            )
+        except Exception as e:
+            await broadcast({"type": "error", "message": str(e)})
+
+    await broadcast({"type": "session_load_end", "conversationId": conv_id})
+    await _broadcast_conv_list()
+
+
+async def _new_conversation(cwd: Optional[str] = None) -> None:
+    global _active_conv_id
+    c = cwd or bridge.cwd or default_cwd()
+    async with _bridge_lock:
+        await bridge.start()
+        sid = await bridge.new_session(c)
+    data = conv_store.create(cwd=c, acp_session_id=sid)
+    _active_conv_id = data["id"]
+    await broadcast(
+        {
+            "type": "session",
+            "sessionId": sid,
+            "conversationId": data["id"],
+            "cwd": c,
+            "fresh": True,
+        }
+    )
+    await broadcast(
+        {
+            "type": "conversation_open",
+            "conversation": {
+                "id": data["id"],
+                "title": data["title"],
+                "cwd": c,
+                "acpSessionId": sid,
+                "messages": [],
+            },
+        }
+    )
+    await _broadcast_conv_list()
+
+
 @app.websocket("/ws")
 async def ws_chat(ws: WebSocket) -> None:
+    global _active_conv_id
     await ws.accept()
     _clients.add(ws)
     try:
@@ -256,6 +405,10 @@ async def ws_chat(ws: WebSocket) -> None:
                 await bridge.start()
                 if not bridge.session_id:
                     await bridge.new_session(default_cwd())
+                if not _active_conv_id:
+                    _active_conv_id = _ensure_active_conv(
+                        bridge.session_id, bridge.cwd or default_cwd()
+                    )
             except Exception as e:
                 await ws.send_text(
                     json.dumps({"type": "error", "message": f"agent start failed: {e}"})
@@ -266,10 +419,13 @@ async def ws_chat(ws: WebSocket) -> None:
                 {
                     "type": "hello",
                     "sessionId": bridge.session_id,
+                    "conversationId": _active_conv_id,
                     "cwd": bridge.cwd,
                     "auth": bridge._public_auth(),
                     "init": bridge._public_init(),
                     "always_approve": bridge.always_approve,
+                    "conversations": conv_store.list(),
+                    "activeId": _active_conv_id,
                 },
                 ensure_ascii=False,
             )
@@ -289,9 +445,16 @@ async def ws_chat(ws: WebSocket) -> None:
                     text = (msg.get("text") or "").strip()
                     if not text:
                         continue
-                    await broadcast({"type": "user", "text": text})
-                    # Run prompt without blocking the receive loop for cancel
-                    asyncio.create_task(_run_prompt(text, msg.get("sessionId")))
+                    # Ensure we have a server conversation
+                    if not _active_conv_id:
+                        _active_conv_id = _ensure_active_conv(
+                            bridge.session_id, bridge.cwd or default_cwd()
+                        )
+                    conv_store.append_message(_active_conv_id, "user", text)
+                    await _broadcast_conv_list()
+                    await broadcast({"type": "user", "text": text, "conversationId": _active_conv_id})
+                    acp = msg.get("sessionId") or bridge.session_id
+                    asyncio.create_task(_run_prompt(text, acp, _active_conv_id))
 
                 elif mtype == "cancel":
                     await bridge.cancel(msg.get("sessionId"))
@@ -300,87 +463,67 @@ async def ws_chat(ws: WebSocket) -> None:
                     cwd = msg.get("cwd")
                     if not cwd:
                         continue
-                    async with _bridge_lock:
-                        sid = await bridge.new_session(cwd)
-                    await broadcast(
-                        {
-                            "type": "session",
-                            "sessionId": sid,
-                            "cwd": bridge.cwd,
-                            "fresh": True,
-                        }
-                    )
+                    await _new_conversation(cwd)
 
                 elif mtype == "new_session":
-                    cwd = msg.get("cwd") or bridge.cwd or default_cwd()
-                    async with _bridge_lock:
-                        sid = await bridge.new_session(cwd)
-                    await broadcast(
-                        {
-                            "type": "session",
-                            "sessionId": sid,
-                            "cwd": bridge.cwd,
-                            "fresh": True,
-                        }
-                    )
+                    await _new_conversation(msg.get("cwd"))
 
-                elif mtype == "load_session":
-                    sid = msg.get("sessionId")
-                    cwd = msg.get("cwd") or bridge.cwd or default_cwd()
-                    if not sid:
+                elif mtype == "open_conversation":
+                    cid = msg.get("conversationId") or msg.get("sessionId")
+                    if not cid:
                         await ws.send_text(
                             json.dumps(
-                                {"type": "error", "message": "load_session needs sessionId"}
+                                {"type": "error", "message": "open_conversation needs conversationId"}
                             )
                         )
                         continue
                     async with _bridge_lock:
-                        try:
-                            await bridge.load_session(sid, cwd)
-                        except Exception as e:
-                            logger.exception("load_session failed")
-                            await broadcast(
-                                {
-                                    "type": "error",
-                                    "message": f"无法进入该对话（可能已失效）: {e}",
-                                }
-                            )
-                            # fall back: keep id in UI but start fresh same cwd
-                            try:
-                                newsid = await bridge.new_session(cwd)
-                                await broadcast(
-                                    {
-                                        "type": "session",
-                                        "sessionId": newsid,
-                                        "cwd": bridge.cwd,
-                                        "fresh": True,
-                                        "replacedFrom": sid,
-                                    }
-                                )
-                            except Exception as e2:
-                                await broadcast({"type": "error", "message": str(e2)})
+                        await _open_conversation(cid)
+
+                elif mtype == "load_session":
+                    # Back-compat: treat as open_conversation by our id or acp id
+                    sid = msg.get("sessionId") or msg.get("conversationId")
+                    if not sid:
+                        continue
+                    # Prefer our conversation id
+                    data = conv_store.get(sid) or conv_store.find_by_acp(sid)
+                    if data:
+                        async with _bridge_lock:
+                            await _open_conversation(data["id"])
+                    else:
+                        await broadcast(
+                            {"type": "error", "message": "本机没有这条对话记录"}
+                        )
+
+                elif mtype == "delete_conversation":
+                    cid = msg.get("conversationId")
+                    if not cid:
+                        continue
+                    was_active = cid == _active_conv_id
+                    conv_store.delete(cid)
+                    if was_active:
+                        _active_conv_id = None
+                        await _new_conversation(bridge.cwd or default_cwd())
+                    else:
+                        await _broadcast_conv_list()
 
                 elif mtype == "permission_reply":
                     req_id = msg.get("id")
                     option_id = msg.get("optionId") or "allow-once"
                     await bridge.reply(
                         req_id,
-                        {
-                            "outcome": {
-                                "outcome": "selected",
-                                "optionId": option_id,
-                            }
-                        },
+                        {"outcome": {"outcome": "selected", "optionId": option_id}},
                     )
 
                 elif mtype == "ping":
                     await ws.send_text(json.dumps({"type": "pong"}))
 
+                elif mtype == "list_conversations":
+                    await ws.send_text(json.dumps(_conv_payload({}), ensure_ascii=False))
+
                 else:
                     await ws.send_text(
-                        json.dumps(
-                            {"type": "error", "message": f"unknown type: {mtype}"}
-                        )
+                        json.dumps({"type": "error", "message": f"unknown type: {mtype}"})
                     )
             except Exception as e:
                 logger.exception("ws handler error")
@@ -393,15 +536,33 @@ async def ws_chat(ws: WebSocket) -> None:
         _clients.discard(ws)
 
 
-async def _run_prompt(text: str, session_id: Optional[str]) -> None:
+async def _run_prompt(
+    text: str, session_id: Optional[str], conv_id: Optional[str]
+) -> None:
+    global _turn_agent, _turn_thought
+    _turn_agent = ""
+    _turn_thought = ""
     try:
-        await broadcast({"type": "turn_start"})
+        await broadcast({"type": "turn_start", "conversationId": conv_id})
         result = await bridge.prompt(text, session_id=session_id)
-        await broadcast({"type": "turn_end", "result": result})
+        if conv_id and (_turn_agent or _turn_thought):
+            conv_store.append_message(
+                conv_id,
+                "assistant",
+                _turn_agent,
+                thought=_turn_thought,
+            )
+            await _broadcast_conv_list()
+        await broadcast({"type": "turn_end", "result": result, "conversationId": conv_id})
     except Exception as e:
         logger.exception("prompt failed")
+        if conv_id:
+            conv_store.append_message(conv_id, "system", f"错误: {e}")
         await broadcast({"type": "error", "message": str(e)})
-        await broadcast({"type": "turn_end", "error": str(e)})
+        await broadcast({"type": "turn_end", "error": str(e), "conversationId": conv_id})
+    finally:
+        _turn_agent = ""
+        _turn_thought = ""
 
 
 @app.get("/")

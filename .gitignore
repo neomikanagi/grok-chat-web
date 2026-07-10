@@ -7,3 +7,6 @@ __pycache__/
 *.log
 .ruff_cache/
 .pytest_cache/
+# conversation JSON is local state — keep directory, ignore contents if desired
+# data/conversations/*.json  # uncomment to not commit chat history
+

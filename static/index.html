@@ -4,18 +4,18 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Grok Chat Web</title>
-  <link rel="stylesheet" href="/static/style.css?v=4" />
+  <link rel="stylesheet" href="/static/style.css?v=5" />
 </head>
 <body>
   <div id="app" class="layout">
-    <!-- Left: local conversations only -->
-    <aside id="chatRail" class="chat-rail" aria-label="本地对话">
+    <!-- Left: conversations on THIS SERVER (disk), not browser cache -->
+    <aside id="chatRail" class="chat-rail" aria-label="本机对话">
       <div class="chat-rail-head">
-        <div class="sidebar-title">本地对话</div>
-        <button id="newChatBtn" class="primary-btn small" type="button" title="新建本地对话">＋ 新对话</button>
+        <div class="sidebar-title">本机对话</div>
+        <button id="newChatBtn" class="primary-btn small" type="button" title="新建对话（存服务器）">＋ 新对话</button>
       </div>
       <div id="chatList" class="chat-list"></div>
-      <div class="chat-rail-foot">仅本机浏览器记录 · 不显示云端会话</div>
+      <div class="chat-rail-foot">存于本机服务器磁盘 · 不显示云端会话</div>
     </aside>
 
     <div id="mainCol">
@@ -101,6 +101,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=4"></script>
+  <script src="/static/app.js?v=5"></script>
 </body>
 </html>
