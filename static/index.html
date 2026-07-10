@@ -4,63 +4,83 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Grok Chat Web</title>
-  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/style.css?v=2" />
 </head>
 <body>
-  <div id="app">
-    <header>
-      <div class="brand">Grok <span>Chat</span></div>
-      <div class="status">
-        <span id="dot" class="dot" title="connection"></span>
-        <span id="statusText">connecting…</span>
-      </div>
-      <button id="cwdBtn" class="cwd-btn" type="button" title="Change working folder">…</button>
-      <button id="browseBtn" class="icon-btn" type="button" title="Browse folders">📁</button>
-      <button id="newSessionBtn" class="icon-btn" type="button" title="New session in same folder">↻</button>
-    </header>
+  <div id="app" class="layout">
+    <!-- Left / main column -->
+    <div id="mainCol">
+      <header>
+        <div class="brand">Grok <span>Chat</span></div>
+        <div class="status">
+          <span id="dot" class="dot" title="connection"></span>
+          <span id="statusText">connecting…</span>
+        </div>
+        <button id="clearBtn" class="ghost-btn" type="button" title="清空当前对话并开新会话">删除对话</button>
+        <button id="toggleSidebar" class="icon-btn" type="button" title="展开/折叠文件夹">📁</button>
+      </header>
 
-    <main id="messages" aria-live="polite"></main>
+      <main id="messages" aria-live="polite"></main>
 
-    <div id="composer-wrap">
-      <div class="hint">
-        <span><kbd>Enter</kbd> 换行</span>
-        <span><kbd id="modKey">⌘</kbd>+<kbd>Enter</kbd> 发送</span>
-        <span><kbd>@</kbd> 插入路径</span>
-        <span>点击消息右上角可复制</span>
-      </div>
-      <div id="composer-area">
-        <div id="ac" role="listbox"></div>
-        <div id="composer">
-          <textarea
-            id="input"
-            placeholder="随便写… 长文也不怕。Enter 换行；⌘/Ctrl+Enter 发送。输入 @ 选文件或文件夹。"
-            autofocus
-          ></textarea>
-          <div class="composer-actions">
-            <button id="sendBtn" class="primary-btn" type="button">发送</button>
-            <button id="cancelBtn" class="ghost-btn" type="button" disabled>停止</button>
+      <div id="composer-wrap">
+        <div class="hint">
+          <span><kbd>Enter</kbd> 换行</span>
+          <span><kbd id="modKey">⌘</kbd>+<kbd>Enter</kbd> 发送</span>
+          <span>右侧点文件可插入路径</span>
+          <span>消息可一键复制</span>
+        </div>
+        <div id="composer-area">
+          <div id="ac" role="listbox"></div>
+          <div id="composer">
+            <textarea
+              id="input"
+              placeholder="随便写… Enter 换行；⌘/Ctrl+Enter 发送。在右侧文件夹点选文件即可插入路径。"
+              autofocus
+            ></textarea>
+            <div class="composer-actions">
+              <button id="sendBtn" class="primary-btn" type="button">发送</button>
+              <button id="cancelBtn" class="ghost-btn" type="button" disabled>停止</button>
+            </div>
           </div>
         </div>
       </div>
     </div>
+
+    <!-- Right collapsible folder panel -->
+    <aside id="sidebar" class="sidebar open" aria-label="文件夹">
+      <div class="sidebar-head">
+        <div class="sidebar-title">文件夹</div>
+        <button id="sidebarClose" class="icon-btn" type="button" title="折叠">⟩</button>
+      </div>
+
+      <div class="sidebar-project">
+        <div class="label" title="相当于在 VS Code / Cursor 里「打开文件夹」：Agent 以这里为项目根来读改文件、跑命令。不是严格沙箱，仍可访问别的路径。">
+          项目根目录
+          <span class="help">?</span>
+        </div>
+        <div id="projectPath" class="project-path" title="">—</div>
+        <div class="sidebar-actions">
+          <button id="setProjectBtn" class="primary-btn small" type="button" title="把下面浏览到的目录设为项目根（会开新会话）">
+            设为项目根
+          </button>
+          <button id="goHomeBtn" class="ghost-btn small" type="button">Home</button>
+        </div>
+      </div>
+
+      <div id="sidePath" class="path-bar"></div>
+      <div class="side-nav">
+        <button id="sideUp" class="ghost-btn small" type="button">上级</button>
+        <button id="sideRefresh" class="ghost-btn small" type="button">刷新</button>
+      </div>
+      <div id="sideList" class="side-list"></div>
+      <div class="sidebar-foot">
+        单击文件 → 插入路径到输入框<br />
+        单击文件夹 → 进入<br />
+        「设为项目根」→ 换工作区（新对话）
+      </div>
+    </aside>
   </div>
 
-  <!-- Folder picker modal -->
-  <div id="picker" class="modal-backdrop" role="dialog" aria-modal="true">
-    <div class="modal">
-      <header>
-        <div class="brand">选择工作目录</div>
-        <button id="pickerClose" class="ghost-btn" type="button">关闭</button>
-      </header>
-      <div id="pickerPath" class="path-bar"></div>
-      <div id="pickerList" class="list"></div>
-      <footer>
-        <button id="pickerUp" class="ghost-btn" type="button">上级</button>
-        <button id="pickerUse" class="primary-btn" type="button">用这个目录</button>
-      </footer>
-    </div>
-  </div>
-
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=2"></script>
 </body>
 </html>

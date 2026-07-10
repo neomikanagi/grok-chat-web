@@ -1,28 +1,39 @@
-/* Grok Chat Web — frontend */
+/* Grok Chat Web — frontend v2 */
 (() => {
   const $ = (id) => document.getElementById(id);
 
+  const appEl = $("app");
   const messagesEl = $("messages");
   const inputEl = $("input");
   const sendBtn = $("sendBtn");
   const cancelBtn = $("cancelBtn");
   const statusText = $("statusText");
   const dot = $("dot");
-  const cwdBtn = $("cwdBtn");
-  const browseBtn = $("browseBtn");
-  const newSessionBtn = $("newSessionBtn");
+  const clearBtn = $("clearBtn");
+  const toggleSidebar = $("toggleSidebar");
+  const sidebar = $("sidebar");
+  const sidebarClose = $("sidebarClose");
+  const projectPathEl = $("projectPath");
+  const setProjectBtn = $("setProjectBtn");
+  const goHomeBtn = $("goHomeBtn");
+  const sidePath = $("sidePath");
+  const sideList = $("sideList");
+  const sideUp = $("sideUp");
+  const sideRefresh = $("sideRefresh");
   const acEl = $("ac");
-  const picker = $("picker");
-  const pickerPath = $("pickerPath");
-  const pickerList = $("pickerList");
+
   const isMac = /Mac|iPhone|iPad/.test(navigator.platform) || navigator.userAgent.includes("Mac");
   $("modKey").textContent = isMac ? "⌘" : "Ctrl";
 
   let ws = null;
   let sessionId = null;
-  let cwd = "";
+  let cwd = ""; // project root (agent session cwd)
+  let browsePath = ""; // sidebar browse location
+  let browseParent = null;
+  let homePath = "";
   let busy = false;
   let reconnectTimer = null;
+  let sidebarOpen = localStorage.getItem("gcw_sidebar") !== "0";
 
   // Streaming message assembly
   let currentAgentEl = null;
@@ -31,16 +42,30 @@
   let agentBuf = "";
   let thoughtBuf = "";
 
-  // @ autocomplete
+  // @ autocomplete (kept as secondary)
   let acItems = [];
   let acIndex = 0;
   let acActive = false;
   let acQueryStart = -1;
   let acTimer = null;
 
-  // Picker state
-  let pickerCwd = "";
-  let pickerParent = null;
+  applySidebarState();
+
+  function applySidebarState() {
+    if (sidebarOpen) {
+      appEl.classList.remove("sidebar-collapsed");
+      sidebar.classList.add("open");
+    } else {
+      appEl.classList.add("sidebar-collapsed");
+      sidebar.classList.remove("open");
+    }
+    localStorage.setItem("gcw_sidebar", sidebarOpen ? "1" : "0");
+  }
+
+  function setSidebar(open) {
+    sidebarOpen = open;
+    applySidebarState();
+  }
 
   function setStatus(text, mode) {
     statusText.textContent = text;
@@ -59,18 +84,13 @@
       .replace(/"/g, "&quot;");
   }
 
-  /** Minimal markdown: fenced code, inline code, bold, paragraphs */
   function renderMarkdown(text) {
     const escaped = escapeHtml(text);
-    // fenced code
     let html = escaped.replace(/```([\w-]*)\n([\s\S]*?)```/g, (_, lang, code) => {
       return `<pre><code class="lang-${lang || "text"}">${code.replace(/\n$/, "")}</code></pre>`;
     });
-    // inline code
     html = html.replace(/`([^`\n]+)`/g, "<code>$1</code>");
-    // bold
     html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-    // paragraphs (only outside pre)
     const parts = html.split(/(<pre>[\s\S]*?<\/pre>)/g);
     html = parts
       .map((part) => {
@@ -151,7 +171,6 @@
           btn.classList.remove("copied");
         }, 1500);
       } catch {
-        // fallback
         const ta = document.createElement("textarea");
         ta.value = text || "";
         document.body.appendChild(ta);
@@ -200,25 +219,142 @@
     busy = v;
     sendBtn.disabled = v;
     cancelBtn.disabled = !v;
+    clearBtn.disabled = v;
     if (v) setStatus("working…", "busy");
     else if (ws && ws.readyState === WebSocket.OPEN) setStatus(statusLine(), "ok");
   }
 
   function statusLine() {
-    const parts = [];
-    if (cwd) parts.push(shortPath(cwd));
-    return parts.join(" · ") || "connected";
+    if (!cwd) return "connected";
+    return shortPath(cwd);
   }
 
   function shortPath(p) {
     if (!p) return "";
-    const homeHints = ["/Users/", "/home/"];
-    // show last 2 segments if long
-    if (p.length > 48) {
+    if (p.length > 40) {
       const segs = p.split("/").filter(Boolean);
       return "…/" + segs.slice(-2).join("/");
     }
     return p;
+  }
+
+  function updateProjectUI() {
+    projectPathEl.textContent = cwd || "（未设置）";
+    projectPathEl.title = cwd || "";
+  }
+
+  function clearChatUI() {
+    finishAgentBubble();
+    messagesEl.innerHTML = "";
+    agentBuf = "";
+    thoughtBuf = "";
+  }
+
+  /** 删除对话 = 清空界面 + 同项目根开新会话（上下文作废） */
+  function clearConversation() {
+    if (busy) {
+      addSystem("请先停止当前任务，再删除对话。");
+      return;
+    }
+    if (!confirm("删除当前对话？界面会清空，并在同一项目根下开新会话（模型记不住旧对话）。")) {
+      return;
+    }
+    clearChatUI();
+    if (cwd) {
+      wsSend({ type: "set_cwd", cwd });
+      addSystem("已删除对话，新会话已开始。项目根：" + cwd);
+    } else {
+      addSystem("已清空界面。请在右侧设置项目根。");
+    }
+  }
+
+  function insertPath(path) {
+    const start = inputEl.selectionStart ?? inputEl.value.length;
+    const end = inputEl.selectionEnd ?? start;
+    const val = inputEl.value;
+    const before = val.slice(0, start);
+    const after = val.slice(end);
+    const needSpace = before.length && !/\s$/.test(before);
+    const insert = (needSpace ? " " : "") + path;
+    inputEl.value = before + insert + after;
+    const caret = (before + insert).length;
+    inputEl.focus();
+    inputEl.setSelectionRange(caret, caret);
+    inputEl.dispatchEvent(new Event("input"));
+  }
+
+  async function loadSideList(path) {
+    const target = path || browsePath || cwd || homePath || "/";
+    try {
+      const res = await fetch(`/api/fs/list?path=${encodeURIComponent(target)}`);
+      if (!res.ok) {
+        addSystem("无法列出目录：" + (await res.text()));
+        return;
+      }
+      const data = await res.json();
+      browsePath = data.path;
+      browseParent = data.parent;
+      sidePath.textContent = data.path;
+      renderSideList(data.entries || []);
+    } catch (e) {
+      addSystem("列目录失败：" + e);
+    }
+  }
+
+  function renderSideList(entries) {
+    const rows = [];
+    for (const e of entries) {
+      const icon = e.is_dir ? "📁" : "📄";
+      const isProject = e.is_dir && cwd && e.path === cwd;
+      rows.push(`
+        <div class="row ${isProject ? "is-project" : ""}"
+             data-path="${escapeHtml(e.path)}"
+             data-dir="${e.is_dir ? "1" : "0"}"
+             title="${escapeHtml(e.path)}">
+          <span class="icon">${icon}</span>
+          <span class="name">${escapeHtml(e.name)}</span>
+          ${isProject ? '<span class="badge">项目根</span>' : ""}
+        </div>`);
+    }
+    sideList.innerHTML =
+      rows.join("") || `<div class="row"><span class="name">（空目录）</span></div>`;
+
+    sideList.querySelectorAll(".row[data-path]").forEach((row) => {
+      row.addEventListener("click", () => {
+        const p = row.dataset.path;
+        const isDir = row.dataset.dir === "1";
+        if (isDir) {
+          loadSideList(p);
+        } else {
+          insertPath(p);
+        }
+      });
+      row.addEventListener("dblclick", () => {
+        const p = row.dataset.path;
+        const isDir = row.dataset.dir === "1";
+        if (isDir) {
+          // double-click folder: set as project root
+          setProjectRoot(p);
+        } else {
+          insertPath(p);
+        }
+      });
+    });
+  }
+
+  function setProjectRoot(path) {
+    const p = path || browsePath;
+    if (!p) return;
+    if (busy) {
+      addSystem("任务进行中，请先停止再切换项目根。");
+      return;
+    }
+    // Switching project root starts a new agent session
+    clearChatUI();
+    wsSend({ type: "set_cwd", cwd: p });
+    addSystem("项目根已切换为：" + p + "（新对话）");
+    // browse stays where user is, or jump into project
+    loadSideList(p);
   }
 
   function connect() {
@@ -253,8 +389,7 @@
       case "hello":
         sessionId = msg.sessionId;
         cwd = msg.cwd || "";
-        cwdBtn.textContent = cwd || "(no cwd)";
-        cwdBtn.title = cwd;
+        updateProjectUI();
         {
           const auth = msg.auth || {};
           const init = msg.init || {};
@@ -265,19 +400,14 @@
             addSystem("登录失败：请先在终端运行 grok 完成登录（写入 ~/.grok/auth.json）");
           }
         }
+        loadSideList(cwd || homePath || "/");
         break;
 
       case "session":
         sessionId = msg.sessionId;
         cwd = msg.cwd || cwd;
-        cwdBtn.textContent = cwd;
-        cwdBtn.title = cwd;
-        addSystem(`工作目录：${cwd}`);
+        updateProjectUI();
         setStatus(statusLine(), "ok");
-        break;
-
-      case "user":
-        // echoed from server
         break;
 
       case "session_update":
@@ -303,20 +433,12 @@
         showPermission(msg);
         break;
 
-      case "permission_auto":
-        // silent
-        break;
-
       case "agent_exit":
         addSystem("Grok agent 进程已退出，正在重连…");
         setBusy(false);
         break;
 
-      case "ready":
-        break;
-
       default:
-        // ignore noise (stderr, notifications)
         break;
     }
   }
@@ -343,8 +465,6 @@
       addTool(update);
     } else if (kind === "tool_call_update") {
       updateTool(update);
-    } else if (kind === "user_message_chunk") {
-      // history replay
     }
   }
 
@@ -399,6 +519,17 @@
 
   sendBtn.addEventListener("click", send);
   cancelBtn.addEventListener("click", () => wsSend({ type: "cancel", sessionId }));
+  clearBtn.addEventListener("click", clearConversation);
+  clearBtn.classList.add("danger");
+
+  toggleSidebar.addEventListener("click", () => setSidebar(!sidebarOpen));
+  sidebarClose.addEventListener("click", () => setSidebar(false));
+  setProjectBtn.addEventListener("click", () => setProjectRoot(browsePath));
+  goHomeBtn.addEventListener("click", () => loadSideList(homePath || "/"));
+  sideUp.addEventListener("click", () => {
+    if (browseParent) loadSideList(browseParent);
+  });
+  sideRefresh.addEventListener("click", () => loadSideList(browsePath));
 
   inputEl.addEventListener("keydown", (e) => {
     if (acActive) {
@@ -425,8 +556,6 @@
         return;
       }
     }
-
-    // Enter = newline (default). Mod+Enter = send.
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       send();
@@ -434,7 +563,6 @@
   });
 
   inputEl.addEventListener("input", () => {
-    // auto-grow
     inputEl.style.height = "auto";
     inputEl.style.height = Math.min(inputEl.scrollHeight, 280) + "px";
     maybeOpenAc();
@@ -457,8 +585,8 @@
   async function fetchAc(q) {
     try {
       const url = q
-        ? `/api/fs/search?q=${encodeURIComponent(q)}&root=${encodeURIComponent(cwd || "")}`
-        : `/api/fs/list?path=${encodeURIComponent(cwd || "")}`;
+        ? `/api/fs/search?q=${encodeURIComponent(q)}&root=${encodeURIComponent(cwd || browsePath || "")}`
+        : `/api/fs/list?path=${encodeURIComponent(cwd || browsePath || "")}`;
       const res = await fetch(url);
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
@@ -466,7 +594,7 @@
       acIndex = 0;
       acActive = acItems.length > 0;
       renderAc();
-    } catch (e) {
+    } catch {
       closeAc();
     }
   }
@@ -518,67 +646,18 @@
     acEl.innerHTML = "";
   }
 
-  // Folder picker
-  async function openPicker(startPath) {
-    picker.classList.add("open");
-    await loadPicker(startPath || cwd || "/");
-  }
-
-  function closePicker() {
-    picker.classList.remove("open");
-  }
-
-  async function loadPicker(path) {
-    const res = await fetch(`/api/fs/list?path=${encodeURIComponent(path)}`);
-    if (!res.ok) {
-      addSystem("无法列出目录：" + (await res.text()));
-      return;
-    }
-    const data = await res.json();
-    pickerCwd = data.path;
-    pickerParent = data.parent;
-    pickerPath.textContent = data.path;
-    const rows = [];
-    if (data.parent) {
-      rows.push(`<div class="row" data-up="1"><span>⬆️</span><span class="name">..</span></div>`);
-    }
-    for (const e of data.entries || []) {
-      if (!e.is_dir) continue;
-      rows.push(
-        `<div class="row" data-path="${escapeHtml(e.path)}"><span>📁</span><span class="name">${escapeHtml(e.name)}</span></div>`
-      );
-    }
-    pickerList.innerHTML = rows.join("") || `<div class="row"><span class="name">（无子目录）</span></div>`;
-    pickerList.querySelectorAll(".row[data-path]").forEach((row) => {
-      row.addEventListener("click", () => loadPicker(row.dataset.path));
-      row.addEventListener("dblclick", () => {
-        useCwd(row.dataset.path);
-      });
-    });
-    const up = pickerList.querySelector("[data-up]");
-    if (up) up.addEventListener("click", () => pickerParent && loadPicker(pickerParent));
-  }
-
-  function useCwd(path) {
-    const p = path || pickerCwd;
-    wsSend({ type: "set_cwd", cwd: p });
-    closePicker();
-  }
-
-  browseBtn.addEventListener("click", () => openPicker(cwd));
-  cwdBtn.addEventListener("click", () => openPicker(cwd));
-  $("pickerClose").addEventListener("click", closePicker);
-  $("pickerUse").addEventListener("click", () => useCwd());
-  $("pickerUp").addEventListener("click", () => pickerParent && loadPicker(pickerParent));
-  picker.addEventListener("click", (e) => {
-    if (e.target === picker) closePicker();
-  });
-
-  newSessionBtn.addEventListener("click", () => {
-    if (cwd) wsSend({ type: "set_cwd", cwd });
-  });
-
   // Boot
-  addSystem("Grok Chat Web — Enter 换行 · ⌘/Ctrl+Enter 发送 · @ 选路径 · 消息可一键复制");
-  connect();
+  fetch("/api/defaults")
+    .then((r) => r.json())
+    .then((d) => {
+      homePath = d.home || "";
+      if (!cwd && d.cwd) {
+        // will be overwritten by hello
+      }
+    })
+    .catch(() => {})
+    .finally(() => {
+      addSystem("Grok Chat — 右侧文件夹点选路径 · 删除对话可清空上下文 · 项目根≈打开工程");
+      connect();
+    });
 })();
