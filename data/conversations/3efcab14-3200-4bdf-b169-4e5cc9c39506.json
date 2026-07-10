@@ -1,9 +1,21 @@
 {
   "id": "3efcab14-3200-4bdf-b169-4e5cc9c39506",
-  "title": "新对话",
+  "title": "Reply with exactly: server-store-ok",
   "cwd": "/mnt/workspaces",
   "acpSessionId": "019f4cd1-743c-72e2-8c8a-246db4147a96",
   "createdAt": 1783700223135,
-  "updatedAt": 1783700223135,
-  "messages": []
+  "updatedAt": 1783700234549,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Reply with exactly: server-store-ok",
+      "ts": 1783700232803
+    },
+    {
+      "role": "assistant",
+      "content": "server-store-ok",
+      "ts": 1783700234549,
+      "thought": "The user wants me to reply with exactly \"server-store-ok\". This is a simple request - no tools needed."
+    }
+  ]
 }
