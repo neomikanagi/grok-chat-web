@@ -1,0 +1,26 @@
+[Unit]
+Description=Grok Chat Web (browser shell for Grok Build ACP)
+Documentation=file:///mnt/workspaces/grok-chat-web/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/mnt/workspaces/grok-chat-web
+# Bound to this GrokBuild container only — single instance on :8787
+Environment=HOST=0.0.0.0
+Environment=PORT=8787
+Environment=GROK_CHAT_PREWARM=1
+Environment=GROK_CHAT_AUTO_APPROVE=1
+Environment=GROK_CHAT_CWD=/mnt/workspaces
+Environment=PATH=/root/.grok/bin:/usr/local/bin:/usr/bin:/bin
+# Prefer project venv uvicorn directly (no second accidental instance)
+ExecStart=/mnt/workspaces/grok-chat-web/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8787 --proxy-headers
+Restart=on-failure
+RestartSec=3
+# One process group; stop children (grok agent) on service stop
+KillMode=control-group
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

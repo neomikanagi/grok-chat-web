@@ -10,6 +10,8 @@ import shutil
 from pathlib import Path
 from typing import Any, Optional
 
+from collections import deque
+
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -71,7 +73,7 @@ async def on_bridge_event(event: dict[str, Any]) -> None:
     await broadcast(event)
 
 
-def _conv_payload(conv: dict[str, Any]) -> dict[str, Any]:
+def _conv_payload() -> dict[str, Any]:
     return {
         "type": "conversations",
         "items": conv_store.list(),
@@ -80,7 +82,7 @@ def _conv_payload(conv: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _broadcast_conv_list() -> None:
-    await broadcast(_conv_payload({}))
+    await broadcast(_conv_payload())
 
 
 def _ensure_active_conv(acp_id: Optional[str], cwd: str) -> str:
@@ -254,10 +256,10 @@ async def fs_search(
     except Exception:
         pass
 
-    stack = [base]
+    stack = deque([base])
     depth_guard = 0
     while stack and len(hits) < limit and depth_guard < 5000:
-        cur = stack.pop(0)
+        cur = stack.popleft()
         depth_guard += 1
         try:
             children = list(cur.iterdir())
@@ -519,7 +521,7 @@ async def ws_chat(ws: WebSocket) -> None:
                     await ws.send_text(json.dumps({"type": "pong"}))
 
                 elif mtype == "list_conversations":
-                    await ws.send_text(json.dumps(_conv_payload({}), ensure_ascii=False))
+                    await ws.send_text(json.dumps(_conv_payload(), ensure_ascii=False))
 
                 else:
                     await ws.send_text(
@@ -544,7 +546,12 @@ async def _run_prompt(
     _turn_thought = ""
     try:
         await broadcast({"type": "turn_start", "conversationId": conv_id})
-        result = await bridge.prompt(text, session_id=session_id)
+        # Serialize turns: _turn_agent/_turn_thought are shared buffers that
+        # on_bridge_event() appends to, so two turns running concurrently
+        # (e.g. a second tab, or a retry racing the first) would interleave
+        # and corrupt each other's saved message.
+        async with _bridge_lock:
+            result = await bridge.prompt(text, session_id=session_id)
         if conv_id and (_turn_agent or _turn_thought):
             conv_store.append_message(
                 conv_id,

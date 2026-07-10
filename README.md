@@ -27,8 +27,10 @@ systemctl stop grok-chat-web
 
 - 容器内：http://127.0.0.1:8787/
 - 同网段：http://192.168.122.126:8787/
-- unit：`/etc/systemd/system/grok-chat-web.service`（`enabled`，开机自启）
+- unit：`/etc/systemd/system/grok-chat-web.service`（`enabled`，开机自启；存档副本见 `deploy/grok-chat-web.service`，容器 rootfs 丢失时用它重建）
 - 默认项目根：`GROK_CHAT_CWD=/mnt/workspaces`
+
+**注意（未解决）：** unit 绑定 `HOST=0.0.0.0`，且 `/ws`、`/api/fs/*` 均无鉴权、`GROK_CHAT_AUTO_APPROVE=1`。同网段（`192.168.122.0/24`）任何主机都能读 `/mnt/workspaces` 任意文件、驱动 agent 自动批准执行任意工具调用 —— 包括 `OpenClaw`（不可信中国模型容器，`.121`）在内。这与 `docs/openclaw-trust-boundary.md` 建立的隔离矛盾。修一次性方案：给 `/ws` 和 `/api/*` 加共享 token 校验（`GROK_CHAT_TOKEN` 环境变量，未设置时不校验，向后兼容）。
 
 手动调试（仅当 systemd 未运行时）可用 `./start.sh`，且强制端口 8787。
 ## 快捷键

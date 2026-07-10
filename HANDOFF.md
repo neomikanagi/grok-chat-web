@@ -2,6 +2,26 @@
 
 > Cursor / GrokBuild / Claude Code 共用。换棒时在**最上面**追加一条，不要删历史。
 
+## 2026-07-11 — claudecode → user (optimize pass + archive)
+
+- **状态：** 成功（重启 smoke test 已过，`/api/health` 正常）
+- **改了：**
+  - `app/main.py`：
+    - `fs_search` 的 BFS 用 `list.pop(0)` 改成 `collections.deque.popleft()` — 原来每层出队都是 O(n)，大目录树下退化明显
+    - `_conv_payload(conv)` 删掉从没用过的 `conv` 参数（两处调用点跟着改）
+    - `_run_prompt` 里 `bridge.prompt()` 补上 `_bridge_lock` — 之前这是唯一一处调 bridge 不加锁的地方，若两个 turn 并发（多开一个标签页、或重试跟第一个请求撞车），共享的 `_turn_agent`/`_turn_thought` 缓冲区会被交叉写坏，存盘消息内容錯亂
+  - `deploy/grok-chat-web.service` — 新增，从容器 `/etc/systemd/system/grok-chat-web.service` 存档进仓库（这份 unit 只在容器 rootfs 里，不在 bind mount 上，容器重建会丢，之前没备份）
+  - `README.md` — 补一条**未解决**的安全提示（见下）
+- **为什么 / 思路：**
+  - 用户反馈"体感能用了"，要求做最后一轮优化；上面三处是实际读代码抓到的 bug/低效，不是猜的
+  - 系统 unit 没进 git，是纯粹的档案缺口，顺手补上
+- **未解决 · 请你决定：**
+  - `grok-chat-web.service` 绑 `HOST=0.0.0.0`，而 `/ws`、`/api/fs/*` 全部**零鉴权**，`GROK_CHAT_AUTO_APPROVE=1`。`192.168.122.0/24` 同网段任何主机（包括 `docs/openclaw-trust-boundary.md` 里明确标记为**不可信**的 `OpenClaw` `.121`）理论上都能直接读 `/mnt/workspaces` 任意文件、或通过 WS 让 agent 自动批准执行任意工具调用 —— 这和已经花力气做的 OpenClaw 隔离矛盾。
+  - 没有直接改：这是要不要牺牲"同网段随便访问"的便利性换安全性的决定，不是纯代码优化，得用户拍板。建议方案是给 `GROK_CHAT_TOKEN` 环境变量做共享密钥校验（未设置时不校验，不影响现状）。
+- **不要还原**：`_run_prompt` 里新加的 `_bridge_lock`（是修 bug，不是误加）。
+
+---
+
 ## 2026-07-10 — grokbuild → user (systemd pin)
 
 - **状态：** 成功
