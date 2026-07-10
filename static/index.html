@@ -4,11 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Grok Chat Web</title>
-  <link rel="stylesheet" href="/static/style.css?v=2" />
+  <link rel="stylesheet" href="/static/style.css?v=3" />
 </head>
 <body>
   <div id="app" class="layout">
-    <!-- Left / main column -->
     <div id="mainCol">
       <header>
         <div class="brand">Grok <span>Chat</span></div>
@@ -16,8 +15,9 @@
           <span id="dot" class="dot" title="connection"></span>
           <span id="statusText">connecting…</span>
         </div>
-        <button id="clearBtn" class="ghost-btn" type="button" title="清空当前对话并开新会话">删除对话</button>
-        <button id="toggleSidebar" class="icon-btn" type="button" title="展开/折叠文件夹">📁</button>
+        <button id="cwdBtn" class="cwd-btn" type="button" title="项目根（很少改）：Agent 默认工作目录">项目根：…</button>
+        <button id="clearBtn" class="ghost-btn danger" type="button" title="清空当前对话并开新会话">删除对话</button>
+        <button id="toggleSidebar" class="icon-btn" type="button" title="展开/折叠文件引用栏">📁</button>
       </header>
 
       <main id="messages" aria-live="polite"></main>
@@ -26,15 +26,15 @@
         <div class="hint">
           <span><kbd>Enter</kbd> 换行</span>
           <span><kbd id="modKey">⌘</kbd>+<kbd>Enter</kbd> 发送</span>
-          <span>右侧点文件可插入路径</span>
-          <span>消息可一键复制</span>
+          <span>右侧选中文件后点「引用」→ 路径进入输入框</span>
+          <span>消息可复制</span>
         </div>
         <div id="composer-area">
           <div id="ac" role="listbox"></div>
           <div id="composer">
             <textarea
               id="input"
-              placeholder="随便写… Enter 换行；⌘/Ctrl+Enter 发送。在右侧文件夹点选文件即可插入路径。"
+              placeholder="随便写… 在右侧选中文件后点「引用」，相当于告诉 Grok：我们在聊这个文件。"
               autofocus
             ></textarea>
             <div class="composer-actions">
@@ -46,41 +46,55 @@
       </div>
     </div>
 
-    <!-- Right collapsible folder panel -->
-    <aside id="sidebar" class="sidebar open" aria-label="文件夹">
+    <!-- Right: file reference browser (not project-root manager) -->
+    <aside id="sidebar" class="sidebar open" aria-label="引用文件">
       <div class="sidebar-head">
-        <div class="sidebar-title">文件夹</div>
+        <div class="sidebar-title">引用文件</div>
         <button id="sidebarClose" class="icon-btn" type="button" title="折叠">⟩</button>
       </div>
 
-      <div class="sidebar-project">
-        <div class="label" title="相当于在 VS Code / Cursor 里「打开文件夹」：Agent 以这里为项目根来读改文件、跑命令。不是严格沙箱，仍可访问别的路径。">
-          项目根目录
-          <span class="help">?</span>
-        </div>
-        <div id="projectPath" class="project-path" title="">—</div>
-        <div class="sidebar-actions">
-          <button id="setProjectBtn" class="primary-btn small" type="button" title="把下面浏览到的目录设为项目根（会开新会话）">
-            设为项目根
-          </button>
-          <button id="goHomeBtn" class="ghost-btn small" type="button">Home</button>
-        </div>
-      </div>
-
-      <div id="sidePath" class="path-bar"></div>
+      <div id="sidePath" class="path-bar" title="当前浏览位置"></div>
       <div class="side-nav">
         <button id="sideUp" class="ghost-btn small" type="button">上级</button>
         <button id="sideRefresh" class="ghost-btn small" type="button">刷新</button>
+        <button id="sideToProject" class="ghost-btn small" type="button" title="跳到项目根浏览">项目根</button>
       </div>
+
       <div id="sideList" class="side-list"></div>
-      <div class="sidebar-foot">
-        单击文件 → 插入路径到输入框<br />
-        单击文件夹 → 进入<br />
-        「设为项目根」→ 换工作区（新对话）
+
+      <!-- Selection + attach action -->
+      <div id="attachBar" class="attach-bar idle">
+        <div class="attach-meta">
+          <div class="attach-label">当前选中</div>
+          <div id="attachName" class="attach-name">未选择</div>
+          <div id="attachPath" class="attach-path"></div>
+        </div>
+        <button id="attachBtn" class="primary-btn attach-btn" type="button" disabled title="把该路径插入输入框（告诉 Grok 我们在聊这个文件）">
+          引用
+        </button>
       </div>
     </aside>
   </div>
 
-  <script src="/static/app.js?v=2"></script>
+  <!-- Rare: change project root (cwd) -->
+  <div id="picker" class="modal-backdrop" role="dialog" aria-modal="true">
+    <div class="modal">
+      <header>
+        <div class="brand">设置项目根</div>
+        <button id="pickerClose" class="ghost-btn" type="button">关闭</button>
+      </header>
+      <div class="modal-hint">
+        项目根 = Agent 默认工作目录（类似 Cursor 打开文件夹）。平时很少改；日常用右侧「引用」指具体文件即可。
+      </div>
+      <div id="pickerPath" class="path-bar"></div>
+      <div id="pickerList" class="list"></div>
+      <footer>
+        <button id="pickerUp" class="ghost-btn" type="button">上级</button>
+        <button id="pickerUse" class="primary-btn" type="button">设为项目根（新会话）</button>
+      </footer>
+    </div>
+  </div>
+
+  <script src="/static/app.js?v=3"></script>
 </body>
 </html>

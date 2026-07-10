@@ -1,4 +1,4 @@
-/* Grok Chat Web — frontend v2 */
+/* Grok Chat Web — frontend v3: sidebar = cite/reference files */
 (() => {
   const $ = (id) => document.getElementById(id);
 
@@ -10,44 +10,55 @@
   const statusText = $("statusText");
   const dot = $("dot");
   const clearBtn = $("clearBtn");
+  const cwdBtn = $("cwdBtn");
   const toggleSidebar = $("toggleSidebar");
   const sidebar = $("sidebar");
   const sidebarClose = $("sidebarClose");
-  const projectPathEl = $("projectPath");
-  const setProjectBtn = $("setProjectBtn");
-  const goHomeBtn = $("goHomeBtn");
   const sidePath = $("sidePath");
   const sideList = $("sideList");
   const sideUp = $("sideUp");
   const sideRefresh = $("sideRefresh");
+  const sideToProject = $("sideToProject");
+  const attachBar = $("attachBar");
+  const attachName = $("attachName");
+  const attachPath = $("attachPath");
+  const attachBtn = $("attachBtn");
   const acEl = $("ac");
+  const picker = $("picker");
+  const pickerPath = $("pickerPath");
+  const pickerList = $("pickerList");
 
   const isMac = /Mac|iPhone|iPad/.test(navigator.platform) || navigator.userAgent.includes("Mac");
   $("modKey").textContent = isMac ? "⌘" : "Ctrl";
 
   let ws = null;
   let sessionId = null;
-  let cwd = ""; // project root (agent session cwd)
-  let browsePath = ""; // sidebar browse location
+  let cwd = "";
+  let browsePath = "";
   let browseParent = null;
   let homePath = "";
   let busy = false;
   let reconnectTimer = null;
   let sidebarOpen = localStorage.getItem("gcw_sidebar") !== "0";
 
-  // Streaming message assembly
+  /** @type {{ path: string, name: string, is_dir: boolean } | null} */
+  let selected = null;
+
   let currentAgentEl = null;
   let currentAgentBody = null;
   let currentThoughtEl = null;
   let agentBuf = "";
   let thoughtBuf = "";
 
-  // @ autocomplete (kept as secondary)
   let acItems = [];
   let acIndex = 0;
   let acActive = false;
   let acQueryStart = -1;
   let acTimer = null;
+
+  // Project-root modal state
+  let pickerCwd = "";
+  let pickerParent = null;
 
   applySidebarState();
 
@@ -186,13 +197,11 @@
     const el = document.createElement("div");
     el.className = "msg tool";
     const title = update.title || update.toolCallId || "tool";
-    const status = update.status || "";
-    const kind = update.kind || "";
     el.innerHTML = `
       <div class="tool-line">
-        <span class="kind">${escapeHtml(kind || "tool")}</span>
+        <span class="kind">${escapeHtml(update.kind || "tool")}</span>
         <span class="title">${escapeHtml(title)}</span>
-        <span class="status">${escapeHtml(status)}</span>
+        <span class="status">${escapeHtml(update.status || "")}</span>
       </div>`;
     el.dataset.toolId = update.toolCallId || "";
     messagesEl.appendChild(el);
@@ -225,8 +234,7 @@
   }
 
   function statusLine() {
-    if (!cwd) return "connected";
-    return shortPath(cwd);
+    return cwd ? shortPath(cwd) : "connected";
   }
 
   function shortPath(p) {
@@ -238,9 +246,11 @@
     return p;
   }
 
-  function updateProjectUI() {
-    projectPathEl.textContent = cwd || "（未设置）";
-    projectPathEl.title = cwd || "";
+  function updateCwdBtn() {
+    cwdBtn.textContent = "项目根：" + (cwd ? shortPath(cwd) : "…");
+    cwdBtn.title = cwd
+      ? "项目根（Agent 默认工作目录）\n" + cwd + "\n点击修改（很少用）"
+      : "设置项目根";
   }
 
   function clearChatUI() {
@@ -250,22 +260,68 @@
     thoughtBuf = "";
   }
 
-  /** 删除对话 = 清空界面 + 同项目根开新会话（上下文作废） */
   function clearConversation() {
     if (busy) {
       addSystem("请先停止当前任务，再删除对话。");
       return;
     }
-    if (!confirm("删除当前对话？界面会清空，并在同一项目根下开新会话（模型记不住旧对话）。")) {
-      return;
-    }
+    if (!confirm("删除当前对话？界面会清空，并在同一项目根下开新会话。")) return;
     clearChatUI();
     if (cwd) {
       wsSend({ type: "set_cwd", cwd });
-      addSystem("已删除对话，新会话已开始。项目根：" + cwd);
+      addSystem("已删除对话，新会话已开始。");
     } else {
-      addSystem("已清空界面。请在右侧设置项目根。");
+      addSystem("已清空界面。");
     }
+  }
+
+  // ── Selection + 引用 ──────────────────────────────────────────
+
+  function setSelected(entry) {
+    selected = entry
+      ? { path: entry.path, name: entry.name, is_dir: !!entry.is_dir }
+      : null;
+    updateAttachBar();
+    // highlight row
+    sideList.querySelectorAll(".row").forEach((row) => {
+      row.classList.toggle("selected", !!(selected && row.dataset.path === selected.path));
+    });
+  }
+
+  function updateAttachBar() {
+    if (!selected) {
+      attachBar.classList.remove("active");
+      attachBar.classList.add("idle");
+      attachName.textContent = "未选择";
+      attachPath.textContent = "点文件夹进入；点文件选中后可「引用」到输入框";
+      attachBtn.disabled = true;
+      return;
+    }
+    attachBar.classList.remove("idle");
+    attachBar.classList.add("active");
+    const kind = selected.is_dir ? "文件夹" : "文件";
+    attachName.textContent = `${kind} · ${selected.name}`;
+    attachPath.textContent = selected.path;
+    // 文件和文件夹都可以引用路径
+    attachBtn.disabled = false;
+    attachBtn.textContent = selected.is_dir ? "引用此文件夹" : "引用";
+  }
+
+  /**
+   * Insert path into composer — this is the Cursor-like "attach file as context".
+   * For the agent it is literally the absolute path in the user message.
+   */
+  function citeSelected() {
+    if (!selected) return;
+    const path = selected.path + (selected.is_dir ? "/" : "");
+    insertPath(path);
+    // brief feedback
+    const prev = attachBtn.textContent;
+    attachBtn.textContent = "已引用 ✓";
+    setTimeout(() => {
+      attachBtn.textContent = prev;
+    }, 1000);
+    inputEl.focus();
   }
 
   function insertPath(path) {
@@ -275,7 +331,13 @@
     const before = val.slice(0, start);
     const after = val.slice(end);
     const needSpace = before.length && !/\s$/.test(before);
-    const insert = (needSpace ? " " : "") + path;
+    // Prefer a clear @path form so it reads like an attachment
+    let token = path;
+    if (!path.startsWith("@") && !before.endsWith("@")) {
+      // keep plain path — agent understands absolute paths well
+      token = path;
+    }
+    const insert = (needSpace ? " " : "") + token;
     inputEl.value = before + insert + after;
     const caret = (before + insert).length;
     inputEl.focus();
@@ -296,6 +358,12 @@
       browseParent = data.parent;
       sidePath.textContent = data.path;
       renderSideList(data.entries || []);
+      // re-apply selection highlight if still in this folder
+      if (selected) {
+        sideList.querySelectorAll(".row").forEach((row) => {
+          row.classList.toggle("selected", row.dataset.path === selected.path);
+        });
+      }
     } catch (e) {
       addSystem("列目录失败：" + e);
     }
@@ -305,15 +373,15 @@
     const rows = [];
     for (const e of entries) {
       const icon = e.is_dir ? "📁" : "📄";
-      const isProject = e.is_dir && cwd && e.path === cwd;
+      const sel = selected && selected.path === e.path ? "selected" : "";
       rows.push(`
-        <div class="row ${isProject ? "is-project" : ""}"
+        <div class="row ${sel}"
              data-path="${escapeHtml(e.path)}"
+             data-name="${escapeHtml(e.name)}"
              data-dir="${e.is_dir ? "1" : "0"}"
              title="${escapeHtml(e.path)}">
           <span class="icon">${icon}</span>
           <span class="name">${escapeHtml(e.name)}</span>
-          ${isProject ? '<span class="badge">项目根</span>' : ""}
         </div>`);
     }
     sideList.innerHTML =
@@ -321,66 +389,95 @@
 
     sideList.querySelectorAll(".row[data-path]").forEach((row) => {
       row.addEventListener("click", () => {
-        const p = row.dataset.path;
-        const isDir = row.dataset.dir === "1";
-        if (isDir) {
-          loadSideList(p);
+        const entry = {
+          path: row.dataset.path,
+          name: row.dataset.name,
+          is_dir: row.dataset.dir === "1",
+        };
+        if (entry.is_dir) {
+          // 选中 + 进入文件夹
+          setSelected(entry);
+          loadSideList(entry.path);
         } else {
-          insertPath(p);
-        }
-      });
-      row.addEventListener("dblclick", () => {
-        const p = row.dataset.path;
-        const isDir = row.dataset.dir === "1";
-        if (isDir) {
-          // double-click folder: set as project root
-          setProjectRoot(p);
-        } else {
-          insertPath(p);
+          // 仅选中文件；底部出现蓝色「引用」
+          setSelected(entry);
         }
       });
     });
   }
 
-  function setProjectRoot(path) {
-    const p = path || browsePath;
-    if (!p) return;
-    if (busy) {
-      addSystem("任务进行中，请先停止再切换项目根。");
+  // ── Project root modal (rare) ─────────────────────────────────
+
+  async function openPicker(startPath) {
+    picker.classList.add("open");
+    await loadPicker(startPath || cwd || homePath || "/");
+  }
+
+  function closePicker() {
+    picker.classList.remove("open");
+  }
+
+  async function loadPicker(path) {
+    const res = await fetch(`/api/fs/list?path=${encodeURIComponent(path)}`);
+    if (!res.ok) {
+      addSystem("无法列出目录：" + (await res.text()));
       return;
     }
-    // Switching project root starts a new agent session
+    const data = await res.json();
+    pickerCwd = data.path;
+    pickerParent = data.parent;
+    pickerPath.textContent = data.path;
+    const rows = [];
+    if (data.parent) {
+      rows.push(`<div class="row" data-up="1"><span>⬆️</span><span class="name">..</span></div>`);
+    }
+    for (const e of data.entries || []) {
+      if (!e.is_dir) continue;
+      rows.push(
+        `<div class="row" data-path="${escapeHtml(e.path)}"><span>📁</span><span class="name">${escapeHtml(e.name)}</span></div>`
+      );
+    }
+    pickerList.innerHTML = rows.join("") || `<div class="row"><span class="name">（无子目录）</span></div>`;
+    pickerList.querySelectorAll(".row[data-path]").forEach((row) => {
+      row.addEventListener("click", () => loadPicker(row.dataset.path));
+    });
+    const up = pickerList.querySelector("[data-up]");
+    if (up) up.addEventListener("click", () => pickerParent && loadPicker(pickerParent));
+  }
+
+  function useProjectRoot(path) {
+    const p = path || pickerCwd;
+    if (!p || busy) {
+      if (busy) addSystem("任务进行中，请先停止再切换项目根。");
+      return;
+    }
     clearChatUI();
     wsSend({ type: "set_cwd", cwd: p });
-    addSystem("项目根已切换为：" + p + "（新对话）");
-    // browse stays where user is, or jump into project
+    closePicker();
+    addSystem("项目根已切换：" + p);
     loadSideList(p);
   }
+
+  // ── WebSocket ─────────────────────────────────────────────────
 
   function connect() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
     ws = new WebSocket(`${proto}://${location.host}/ws`);
     setStatus("connecting…", "");
-
     ws.onopen = () => setStatus("connected", "ok");
-
     ws.onclose = () => {
       setStatus("disconnected — reconnecting…", "err");
       setBusy(false);
       clearTimeout(reconnectTimer);
       reconnectTimer = setTimeout(connect, 1200);
     };
-
     ws.onerror = () => setStatus("socket error", "err");
-
     ws.onmessage = (ev) => {
-      let msg;
       try {
-        msg = JSON.parse(ev.data);
+        handleEvent(JSON.parse(ev.data));
       } catch {
-        return;
+        /* ignore */
       }
-      handleEvent(msg);
     };
   }
 
@@ -389,7 +486,7 @@
       case "hello":
         sessionId = msg.sessionId;
         cwd = msg.cwd || "";
-        updateProjectUI();
+        updateCwdBtn();
         {
           const auth = msg.auth || {};
           const init = msg.init || {};
@@ -397,47 +494,39 @@
           const model = init.currentModelId || "";
           setStatus(`${who}${model ? " · " + model : ""}`, auth.ok === false ? "err" : "ok");
           if (auth.ok === false) {
-            addSystem("登录失败：请先在终端运行 grok 完成登录（写入 ~/.grok/auth.json）");
+            addSystem("登录失败：请先在终端运行 grok 完成登录");
           }
         }
         loadSideList(cwd || homePath || "/");
         break;
-
       case "session":
         sessionId = msg.sessionId;
         cwd = msg.cwd || cwd;
-        updateProjectUI();
+        updateCwdBtn();
         setStatus(statusLine(), "ok");
         break;
-
       case "session_update":
         handleSessionUpdate(msg.update || {});
         break;
-
       case "turn_start":
         setBusy(true);
         finishAgentBubble();
         break;
-
       case "turn_end":
         setBusy(false);
         finishAgentBubble();
         break;
-
       case "error":
         addSystem("错误：" + (msg.message || "unknown"));
         setBusy(false);
         break;
-
       case "permission":
         showPermission(msg);
         break;
-
       case "agent_exit":
-        addSystem("Grok agent 进程已退出，正在重连…");
+        addSystem("Grok agent 已退出，正在重连…");
         setBusy(false);
         break;
-
       default:
         break;
     }
@@ -447,14 +536,12 @@
     const kind = update.sessionUpdate;
     if (kind === "agent_message_chunk") {
       ensureAgentBubble();
-      const t = (update.content && update.content.text) || "";
-      agentBuf += t;
+      agentBuf += (update.content && update.content.text) || "";
       currentAgentBody.innerHTML = renderMarkdown(agentBuf);
       scrollBottom();
     } else if (kind === "agent_thought_chunk") {
       ensureAgentBubble();
-      const t = (update.content && update.content.text) || "";
-      thoughtBuf += t;
+      thoughtBuf += (update.content && update.content.text) || "";
       if (currentThoughtEl) {
         currentThoughtEl.style.display = "block";
         currentThoughtEl.textContent = thoughtBuf;
@@ -476,35 +563,25 @@
     const options = msg.options || [];
     el.innerHTML = `<div class="role">需要批准</div><div>${escapeHtml(title)}</div><div class="actions"></div>`;
     const actions = el.querySelector(".actions");
-    options.forEach((opt) => {
-      const b = document.createElement("button");
-      b.className = (opt.kind || "").includes("allow") ? "primary-btn" : "ghost-btn";
-      b.type = "button";
-      b.textContent = opt.name || opt.optionId;
-      b.onclick = () => {
-        wsSend({ type: "permission_reply", id: msg.id, optionId: opt.optionId });
-        el.remove();
-      };
-      actions.appendChild(b);
-    });
-    if (!options.length) {
-      const b = document.createElement("button");
-      b.className = "primary-btn";
-      b.textContent = "Allow once";
-      b.onclick = () => {
-        wsSend({ type: "permission_reply", id: msg.id, optionId: "allow-once" });
-        el.remove();
-      };
-      actions.appendChild(b);
-    }
+    (options.length ? options : [{ optionId: "allow-once", name: "Allow once", kind: "allow_once" }]).forEach(
+      (opt) => {
+        const b = document.createElement("button");
+        b.className = (opt.kind || "").includes("allow") ? "primary-btn" : "ghost-btn";
+        b.type = "button";
+        b.textContent = opt.name || opt.optionId;
+        b.onclick = () => {
+          wsSend({ type: "permission_reply", id: msg.id, optionId: opt.optionId });
+          el.remove();
+        };
+        actions.appendChild(b);
+      }
+    );
     messagesEl.appendChild(el);
     scrollBottom();
   }
 
   function wsSend(obj) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(obj));
-    }
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
   }
 
   function send() {
@@ -517,19 +594,26 @@
     closeAc();
   }
 
+  // ── Events ────────────────────────────────────────────────────
+
   sendBtn.addEventListener("click", send);
   cancelBtn.addEventListener("click", () => wsSend({ type: "cancel", sessionId }));
   clearBtn.addEventListener("click", clearConversation);
-  clearBtn.classList.add("danger");
+  attachBtn.addEventListener("click", citeSelected);
 
   toggleSidebar.addEventListener("click", () => setSidebar(!sidebarOpen));
   sidebarClose.addEventListener("click", () => setSidebar(false));
-  setProjectBtn.addEventListener("click", () => setProjectRoot(browsePath));
-  goHomeBtn.addEventListener("click", () => loadSideList(homePath || "/"));
-  sideUp.addEventListener("click", () => {
-    if (browseParent) loadSideList(browseParent);
-  });
+  sideUp.addEventListener("click", () => browseParent && loadSideList(browseParent));
   sideRefresh.addEventListener("click", () => loadSideList(browsePath));
+  sideToProject.addEventListener("click", () => loadSideList(cwd || homePath || "/"));
+
+  cwdBtn.addEventListener("click", () => openPicker(cwd));
+  $("pickerClose").addEventListener("click", closePicker);
+  $("pickerUse").addEventListener("click", () => useProjectRoot());
+  $("pickerUp").addEventListener("click", () => pickerParent && loadPicker(pickerParent));
+  picker.addEventListener("click", (e) => {
+    if (e.target === picker) closePicker();
+  });
 
   inputEl.addEventListener("keydown", (e) => {
     if (acActive) {
@@ -577,9 +661,8 @@
       return;
     }
     acQueryStart = before.lastIndexOf("@");
-    const q = m[1] || "";
     clearTimeout(acTimer);
-    acTimer = setTimeout(() => fetchAc(q), 120);
+    acTimer = setTimeout(() => fetchAc(m[1] || ""), 120);
   }
 
   async function fetchAc(q) {
@@ -608,7 +691,7 @@
       .map((it, i) => {
         const icon = it.is_dir ? "📁" : "📄";
         const path = it.rel || it.path;
-        return `<div class="item ${i === acIndex ? "active" : ""}" data-i="${i}" role="option">
+        return `<div class="item ${i === acIndex ? "active" : ""}" data-i="${i}">
           <span class="icon">${icon}</span>
           <span class="name">${escapeHtml(it.name)}</span>
           <span class="path">${escapeHtml(path)}</span>
@@ -647,17 +730,15 @@
   }
 
   // Boot
+  updateAttachBar();
   fetch("/api/defaults")
     .then((r) => r.json())
     .then((d) => {
       homePath = d.home || "";
-      if (!cwd && d.cwd) {
-        // will be overwritten by hello
-      }
     })
     .catch(() => {})
     .finally(() => {
-      addSystem("Grok Chat — 右侧文件夹点选路径 · 删除对话可清空上下文 · 项目根≈打开工程");
+      addSystem("右侧「引用文件」：点文件夹进入；点文件选中后点蓝色「引用」→ 路径写入输入框。");
       connect();
     });
 })();
