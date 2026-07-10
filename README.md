@@ -30,7 +30,13 @@ systemctl stop grok-chat-web
 - unit：`/etc/systemd/system/grok-chat-web.service`（`enabled`，开机自启；存档副本见 `deploy/grok-chat-web.service`，容器 rootfs 丢失时用它重建）
 - 默认项目根：`GROK_CHAT_CWD=/mnt/workspaces`
 
-**注意（未解决）：** unit 绑定 `HOST=0.0.0.0`，且 `/ws`、`/api/fs/*` 均无鉴权、`GROK_CHAT_AUTO_APPROVE=1`。同网段（`192.168.122.0/24`）任何主机都能读 `/mnt/workspaces` 任意文件、驱动 agent 自动批准执行任意工具调用 —— 包括 `OpenClaw`（不可信中国模型容器，`.121`）在内。这与 `docs/openclaw-trust-boundary.md` 建立的隔离矛盾。修一次性方案：给 `/ws` 和 `/api/*` 加共享 token 校验（`GROK_CHAT_TOKEN` 环境变量，未设置时不校验，向后兼容）。
+**鉴权（2026-07-11 加）：** unit 绑定 `HOST=0.0.0.0`，同网段（`192.168.122.0/24`，含不可信的 `OpenClaw` `.121`）本可直接读 `/mnt/workspaces` 任意文件、驱动 agent 自动批准任意工具调用。现已给 `/ws` 和所有 `/api/*` 加共享 token 校验：
+
+- 真实 token 存在 `_secrets/agent.env` 的 `GROK_CHAT_TOKEN`，同时写进容器 unit 的 `Environment=`（**不进 git** — `deploy/grok-chat-web.service` 里是占位符）
+- 未设置 `GROK_CHAT_TOKEN` 时不校验（向后兼容）
+- HTTP：`Authorization: Bearer <token>` 或 `?token=` query 均可；WS：浏览器不能自定义握手 header，走 `?token=` query
+- 浏览器首次请求若收到 401，`app.js` 会弹窗要求粘贴 token，存 `localStorage`（`gcw_token`），之后自动带上
+- 换 token：改 `agent.env` 里的值 + 容器 unit 里的 `Environment=GROK_CHAT_TOKEN=` + `systemctl daemon-reload && systemctl restart grok-chat-web`；浏览器端 `localStorage.removeItem("gcw_token")` 后刷新会重新弹窗
 
 手动调试（仅当 systemd 未运行时）可用 `./start.sh`，且强制端口 8787。
 ## 快捷键

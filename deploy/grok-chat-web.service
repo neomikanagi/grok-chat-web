@@ -13,6 +13,8 @@ Environment=PORT=8787
 Environment=GROK_CHAT_PREWARM=1
 Environment=GROK_CHAT_AUTO_APPROVE=1
 Environment=GROK_CHAT_CWD=/mnt/workspaces
+# Real value lives only in the live unit + _secrets/agent.env (GROK_CHAT_TOKEN) — never commit it here.
+Environment=GROK_CHAT_TOKEN=__SET_FROM_SECRETS_AGENT_ENV__
 Environment=PATH=/root/.grok/bin:/usr/local/bin:/usr/bin:/bin
 # Prefer project venv uvicorn directly (no second accidental instance)
 ExecStart=/mnt/workspaces/grok-chat-web/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8787 --proxy-headers

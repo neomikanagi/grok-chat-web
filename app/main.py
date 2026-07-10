@@ -12,7 +12,7 @@ from typing import Any, Optional
 
 from collections import deque
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -36,6 +36,25 @@ bridge = ACPBridge(
     model=os.environ.get("GROK_CHAT_MODEL"),
     always_approve=os.environ.get("GROK_CHAT_AUTO_APPROVE", "1") not in ("0", "false", "False"),
 )
+
+# Optional shared-secret gate for /ws + /api/* — unset (default) means no
+# check, same as before. Same-subnet hosts otherwise have unauthenticated
+# read/write access to everything under GROK_CHAT_CWD via this service.
+GROK_CHAT_TOKEN = os.environ.get("GROK_CHAT_TOKEN") or None
+
+
+def _request_token(request: Request) -> Optional[str]:
+    auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    return request.query_params.get("token")
+
+
+async def require_token(request: Request) -> None:
+    if not GROK_CHAT_TOKEN:
+        return
+    if _request_token(request) != GROK_CHAT_TOKEN:
+        raise HTTPException(401, "missing or invalid token")
 
 _clients: set[WebSocket] = set()
 _bridge_lock = asyncio.Lock()
@@ -133,7 +152,7 @@ class SessionBody(BaseModel):
     cwd: str = Field(..., description="Absolute working directory for the agent")
 
 
-@app.get("/api/health")
+@app.get("/api/health", dependencies=[Depends(require_token)])
 async def health() -> dict[str, Any]:
     return {
         "ok": True,
@@ -150,7 +169,7 @@ async def health() -> dict[str, Any]:
     }
 
 
-@app.get("/api/defaults")
+@app.get("/api/defaults", dependencies=[Depends(require_token)])
 async def defaults() -> dict[str, Any]:
     return {
         "cwd": bridge.cwd or default_cwd(),
@@ -161,7 +180,7 @@ async def defaults() -> dict[str, Any]:
     }
 
 
-@app.get("/api/conversations")
+@app.get("/api/conversations", dependencies=[Depends(require_token)])
 async def api_list_conversations() -> dict[str, Any]:
     return {
         "items": conv_store.list(),
@@ -169,7 +188,7 @@ async def api_list_conversations() -> dict[str, Any]:
     }
 
 
-@app.get("/api/conversations/{conv_id}")
+@app.get("/api/conversations/{conv_id}", dependencies=[Depends(require_token)])
 async def api_get_conversation(conv_id: str) -> dict[str, Any]:
     data = conv_store.get(conv_id)
     if not data:
@@ -177,7 +196,7 @@ async def api_get_conversation(conv_id: str) -> dict[str, Any]:
     return data
 
 
-@app.delete("/api/conversations/{conv_id}")
+@app.delete("/api/conversations/{conv_id}", dependencies=[Depends(require_token)])
 async def api_delete_conversation(conv_id: str) -> dict[str, Any]:
     global _active_conv_id
     ok = conv_store.delete(conv_id)
@@ -189,7 +208,7 @@ async def api_delete_conversation(conv_id: str) -> dict[str, Any]:
     return {"ok": True, "id": conv_id}
 
 
-@app.get("/api/fs/list")
+@app.get("/api/fs/list", dependencies=[Depends(require_token)])
 async def fs_list(
     path: Optional[str] = Query(None),
     show_hidden: bool = Query(False),
@@ -223,7 +242,7 @@ async def fs_list(
     return {"path": str(base), "parent": parent, "entries": entries}
 
 
-@app.get("/api/fs/search")
+@app.get("/api/fs/search", dependencies=[Depends(require_token)])
 async def fs_search(
     q: str = Query(..., min_length=1),
     root: Optional[str] = Query(None),
@@ -399,6 +418,11 @@ async def _new_conversation(cwd: Optional[str] = None) -> None:
 @app.websocket("/ws")
 async def ws_chat(ws: WebSocket) -> None:
     global _active_conv_id
+    if GROK_CHAT_TOKEN and ws.query_params.get("token") != GROK_CHAT_TOKEN:
+        # Browsers can't set custom headers on the WS handshake, so the
+        # token travels as a query param here (matches app.js).
+        await ws.close(code=4401)
+        return
     await ws.accept()
     _clients.add(ws)
     try:

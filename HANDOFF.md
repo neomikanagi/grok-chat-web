@@ -2,6 +2,27 @@
 
 > Cursor / GrokBuild / Claude Code 共用。换棒时在**最上面**追加一条，不要删历史。
 
+## 2026-07-11 — claudecode → user (token auth，跟进上一条「未解决」)
+
+- **状态：** 成功。已重启 `grok-chat-web`，curl 验证：无 token → `401`；`Authorization: Bearer` 或 `?token=` 带对 token → `200`；WS 握手不带 token → `403 Forbidden`（Starlette 在 `ws.close()` 于 `accept()` 之前时的标准行为）、带对 token → `101 Switching Protocols`。`/` 和 `/static/*` 保持不鉴权（只是壳，没有密钥）。
+- **改了：**
+  - `app/main.py` — 新增 `GROK_CHAT_TOKEN` 环境变量 + `require_token` 依赖；挂到所有 `/api/*` 路由；`/ws` 在 `accept()` 前手动比对 `ws.query_params["token"]`
+  - `static/app.js` — 新增 `apiFetch()`（自动带 `Authorization` header，收到 401 就 `prompt()` 弹窗要 token 存 `localStorage.gcw_token`，重试一次）；所有原来裸 `fetch()` 换成 `apiFetch()`；`connect()` 里 WS URL 拼 `?token=`；`ws.onclose` 里 `code===4401` 也触发弹窗
+  - `static/index.html` — `app.js?v=6` → `v=7`（改了要硬刷新才生效）
+  - `_secrets/agent.env` / `agent.env.example` — 加 `GROK_CHAT_TOKEN`（真实值只在 agent.env + 容器 unit，没进 git）
+  - 容器 `/etc/systemd/system/grok-chat-web.service` — 加 `Environment=GROK_CHAT_TOKEN=<真实值>`；`deploy/grok-chat-web.service`（git 里的存档副本）用占位符 `__SET_FROM_SECRETS_AGENT_ENV__`，不提交真实值
+- **为什么 / 思路：**
+  - 上一条 HANDOFF 记录了这个洞但没动手，因为要不要牺牲"同网段免密访问"的便利性是用户的决定；问过之后用户选了"现在加 token"
+  - 没做的替代方案：① 只留文档不改代码（用户没选）；② 用 iptables/防火墙隔离 OpenClaw 网段（用户没选，且更复杂、牵扯宿主网络配置，风险更高）
+  - Token 走 query param 而非只走 header，是因为浏览器原生 `WebSocket` 构造函数不能设自定义 header，`/ws` 握手只能靠 URL 带；HTTP 端两种都支持，`Authorization` 优先
+  - 没有把 token 存进 git（哪怕是 `deploy/` 里的存档副本）——那是纯粹给"容器 rootfs 没了怎么重建"用的文档，真值只活在 `agent.env`（唯一权威源）和运行中的 unit 里，符合 `agent-secrets.mdc`
+- **请你：**
+  - 如果你（人类）要从浏览器访问 http://192.168.122.126:8787/，第一次会弹窗要粘贴 token —— 去 `_secrets/agent.env` 找 `GROK_CHAT_TOKEN` 那一行的值
+  - 换 token 步骤见 `README.md` 鉴权那节
+- **不要还原**：`require_token` / `apiFetch` / WS 的 `?token=` —— 这是刚补的鉴权，不是误加的复杂度。
+
+---
+
 ## 2026-07-11 — claudecode → user (optimize pass + archive)
 
 - **状态：** 成功（重启 smoke test 已过，`/api/health` 正常）

@@ -91,6 +91,36 @@
   function scrollBottom() {
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
+  // ── Access token (only matters if the server has GROK_CHAT_TOKEN set) ──
+  function getStoredToken() {
+    return localStorage.getItem("gcw_token") || "";
+  }
+  function promptForToken() {
+    const t = window.prompt("需要访问令牌（服务器已开启 GROK_CHAT_TOKEN 校验），请粘贴：", "");
+    if (t && t.trim()) localStorage.setItem("gcw_token", t.trim());
+    return getStoredToken();
+  }
+  function authHeaders() {
+    const t = getStoredToken();
+    return t ? { Authorization: "Bearer " + t } : {};
+  }
+  async function apiFetch(url, opts = {}) {
+    const merged = Object.assign({}, opts, {
+      headers: Object.assign({}, opts.headers || {}, authHeaders()),
+    });
+    let res = await fetch(url, merged);
+    if (res.status === 401) {
+      promptForToken();
+      res = await fetch(
+        url,
+        Object.assign({}, opts, {
+          headers: Object.assign({}, opts.headers || {}, authHeaders()),
+        })
+      );
+    }
+    return res;
+  }
+
   function escapeHtml(s) {
     return String(s)
       .replace(/&/g, "&amp;")
@@ -479,7 +509,7 @@
   async function loadSideList(path) {
     const target = path || browsePath || cwd || homePath || "/";
     try {
-      const res = await fetch(`/api/fs/list?path=${encodeURIComponent(target)}`);
+      const res = await apiFetch(`/api/fs/list?path=${encodeURIComponent(target)}`);
       if (!res.ok) {
         addSystem("无法列出目录：" + (await res.text()));
         return;
@@ -531,7 +561,7 @@
     picker.classList.remove("open");
   }
   async function loadPicker(path) {
-    const res = await fetch(`/api/fs/list?path=${encodeURIComponent(path)}`);
+    const res = await apiFetch(`/api/fs/list?path=${encodeURIComponent(path)}`);
     if (!res.ok) return;
     const data = await res.json();
     pickerCwd = data.path;
@@ -563,10 +593,14 @@
   // ── WebSocket ─────────────────────────────────────────────────
   function connect() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    ws = new WebSocket(`${proto}://${location.host}/ws`);
+    const t = getStoredToken();
+    const qs = t ? `?token=${encodeURIComponent(t)}` : "";
+    ws = new WebSocket(`${proto}://${location.host}/ws${qs}`);
     setStatus("connecting…", "");
     ws.onopen = () => setStatus("connected", "ok");
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
+      // 4401 = server-side token check failed (see require_token in main.py)
+      if (ev.code === 4401) promptForToken();
       setStatus("disconnected — reconnecting…", "err");
       setBusy(false);
       clearTimeout(reconnectTimer);
@@ -599,7 +633,7 @@
         loadSideList(cwd || homePath || "/");
         // Load active conversation transcript from server
         if (conversationId) {
-          fetch(`/api/conversations/${encodeURIComponent(conversationId)}`)
+          apiFetch(`/api/conversations/${encodeURIComponent(conversationId)}`)
             .then((r) => (r.ok ? r.json() : null))
             .then((data) => {
               if (data && data.messages && data.messages.length) {
@@ -840,7 +874,7 @@
       const url = q
         ? `/api/fs/search?q=${encodeURIComponent(q)}&root=${encodeURIComponent(cwd || browsePath || "")}`
         : `/api/fs/list?path=${encodeURIComponent(cwd || browsePath || "")}`;
-      const res = await fetch(url);
+      const res = await apiFetch(url);
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       acItems = (data.entries || []).slice(0, 30);
@@ -898,7 +932,7 @@
 
   updateAttachBar();
   // Update foot text in HTML via first system line
-  fetch("/api/defaults")
+  apiFetch("/api/defaults")
     .then((r) => r.json())
     .then((d) => {
       homePath = d.home || "";
