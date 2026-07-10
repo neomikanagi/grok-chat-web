@@ -21,7 +21,7 @@ fi
 if command -v systemctl >/dev/null 2>&1; then
   if systemctl is-active --quiet grok-chat-web.service 2>/dev/null; then
     echo "grok-chat-web.service is already running on :8787"
-    echo "  URL: http://192.168.122.126:8787/  (this container)"
+    echo "  URL: http://127.0.0.1:8787/  (this host/container)"
     echo "  Manage: systemctl restart|stop|status grok-chat-web"
     exit 0
   fi

@@ -2,6 +2,22 @@
 
 > Cursor / GrokBuild / Claude Code 共用。换棒时在**最上面**追加一条，不要删历史。
 
+## 2026-07-11 — claudecode → user (迁移到宿主 Docker 部署，旧 LXC 部署退役)
+
+- **状态：** 成功。这个项目的实际部署方式变了——不再是"systemd unit 跑在 GrokBuild LXC 容器里"，而是"Docker 容器跑在 Unraid 宿主上，挂载宿主已持久化的 grok CLI"。旧的 GrokBuild LXC（`.126`）已经整个退役重建成纯浏览器手脚容器（不再跑 grok agent），新 IP `.140`，旧 rootfs 归档在 `/mnt/cache/lxc/_retired-GrokBuild-20260711`。
+- **改了：**
+  - 新增 `Dockerfile` / `docker-compose.yml` / `.dockerignore` / `.env.example`：容器挂载宿主 `grok-home`（`GROK_HOME`/`GROK_BIN` 指过去），不打包 grok 专有二进制
+  - `docker-compose.yml` 默认只绑 `127.0.0.1`（`BIND_ADDR`），不像旧部署默认 `0.0.0.0`——要暴露到局域网需自己设 `GROK_CHAT_TOKEN` 并加宽 `BIND_ADDR`
+  - `data/conversations/*.json`（真实聊天记录）之前被 git 误跟踪，已 `git rm --cached` + 补 `.gitignore`
+  - `README.md` 改成 Docker-first，去掉了内网 IP / 容器名等家庭实验室特定信息（要推公开仓库）
+  - 旧的 `deploy/grok-chat-web.service`（真实部署用，路径写死 `/mnt/workspaces`）保留在本地但**不进公开仓库**；新增泛化版 `deploy/grok-chat-web.example.service` 给外部用户参考
+  - 旧 LXC 里的 `grok-chat-web.service` 已 `systemctl stop` + `disable`
+- **为什么：** 用户要求把这个项目整理成可 docker 部署、可推公开 GitHub 仓库；同时把 grok CLI 从"只能在专属 LXC 里跑"升级成"宿主级安装，跟 Claude Code / Cursor 平级"，GrokBuild LXC 相应地从"跑 grok 的工人"变成"纯浏览器手脚"，跟 ClaudeCode/Cursor LXC 同构。
+- **请你：**
+  - 宿主上通过 `docker ps --filter name=grok-chat-web` 管理，不再用 `systemctl ... grok-chat-web`（旧 unit 还在但已停用）
+  - 公开仓库还没实际 `push`——按用户自己的规矩，公开前他要亲自看一遍会公开的内容，目前只准备到本地 `public-release` 分支（干净的单一 commit，不含 `HANDOFF.md` / 真实 systemd unit / 聊天记录），没有创建远端仓库
+- **不要还原**：旧 `deploy/grok-chat-web.service` 里的路径——那是真实部署存档，不是笔误。
+
 ## 2026-07-11 — claudecode → user (token auth，跟进上一条「未解决」)
 
 - **状态：** 成功。已重启 `grok-chat-web`，curl 验证：无 token → `401`；`Authorization: Bearer` 或 `?token=` 带对 token → `200`；WS 握手不带 token → `403 Forbidden`（Starlette 在 `ws.close()` 于 `accept()` 之前时的标准行为）、带对 token → `101 Switching Protocols`。`/` 和 `/static/*` 保持不鉴权（只是壳，没有密钥）。
