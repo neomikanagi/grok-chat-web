@@ -1,6 +1,7 @@
-/* Grok Chat Web — frontend v3: sidebar = cite/reference files */
+/* Grok Chat Web v4 — Enter send, collapsed thinking, local chats only */
 (() => {
   const $ = (id) => document.getElementById(id);
+  const STORE_KEY = "gcw_local_chats_v1";
 
   const appEl = $("app");
   const messagesEl = $("messages");
@@ -9,8 +10,10 @@
   const cancelBtn = $("cancelBtn");
   const statusText = $("statusText");
   const dot = $("dot");
-  const clearBtn = $("clearBtn");
   const cwdBtn = $("cwdBtn");
+  const newChatBtn = $("newChatBtn");
+  const chatListEl = $("chatList");
+  const toggleChatRail = $("toggleChatRail");
   const toggleSidebar = $("toggleSidebar");
   const sidebar = $("sidebar");
   const sidebarClose = $("sidebarClose");
@@ -28,9 +31,6 @@
   const pickerPath = $("pickerPath");
   const pickerList = $("pickerList");
 
-  const isMac = /Mac|iPhone|iPad/.test(navigator.platform) || navigator.userAgent.includes("Mac");
-  $("modKey").textContent = isMac ? "⌘" : "Ctrl";
-
   let ws = null;
   let sessionId = null;
   let cwd = "";
@@ -40,13 +40,15 @@
   let busy = false;
   let reconnectTimer = null;
   let sidebarOpen = localStorage.getItem("gcw_sidebar") !== "0";
-
-  /** @type {{ path: string, name: string, is_dir: boolean } | null} */
+  let chatRailOpen = localStorage.getItem("gcw_chat_rail") !== "0";
+  let replaying = false; // session/load history
   let selected = null;
 
+  // Streaming agent bubble
   let currentAgentEl = null;
   let currentAgentBody = null;
   let currentThoughtEl = null;
+  let currentThinkToggle = null;
   let agentBuf = "";
   let thoughtBuf = "";
 
@@ -55,38 +57,176 @@
   let acActive = false;
   let acQueryStart = -1;
   let acTimer = null;
-
-  // Project-root modal state
   let pickerCwd = "";
   let pickerParent = null;
 
-  applySidebarState();
-
-  function applySidebarState() {
-    if (sidebarOpen) {
-      appEl.classList.remove("sidebar-collapsed");
-      sidebar.classList.add("open");
-    } else {
-      appEl.classList.add("sidebar-collapsed");
-      sidebar.classList.remove("open");
+  // ── Local conversation store (browser only; never list cloud) ──
+  function loadStore() {
+    try {
+      const raw = localStorage.getItem(STORE_KEY);
+      if (!raw) return { items: [], activeId: null };
+      const data = JSON.parse(raw);
+      return {
+        items: Array.isArray(data.items) ? data.items : [],
+        activeId: data.activeId || null,
+      };
+    } catch {
+      return { items: [], activeId: null };
     }
-    localStorage.setItem("gcw_sidebar", sidebarOpen ? "1" : "0");
   }
 
-  function setSidebar(open) {
-    sidebarOpen = open;
-    applySidebarState();
+  function saveStore(store) {
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify({ items: store.items, activeId: store.activeId })
+    );
   }
+
+  let store = loadStore();
+
+  function upsertLocalChat({ id, title, cwd: c, touch }) {
+    if (!id) return;
+    const now = Date.now();
+    let item = store.items.find((x) => x.id === id);
+    if (!item) {
+      item = {
+        id,
+        title: title || "新对话",
+        cwd: c || cwd || "",
+        createdAt: now,
+        updatedAt: now,
+      };
+      store.items.unshift(item);
+    } else {
+      if (title) item.title = title;
+      if (c) item.cwd = c;
+      if (touch !== false) item.updatedAt = now;
+    }
+    store.activeId = id;
+    // sort newest first
+    store.items.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    saveStore(store);
+    renderChatList();
+  }
+
+  function removeLocalChat(id) {
+    store.items = store.items.filter((x) => x.id !== id);
+    if (store.activeId === id) store.activeId = null;
+    saveStore(store);
+    renderChatList();
+  }
+
+  function renderChatList() {
+    if (!store.items.length) {
+      chatListEl.innerHTML = `<div class="chat-item" style="cursor:default;opacity:.7">
+        <div class="title">暂无本地对话</div>
+        <div class="meta">点上方「新对话」开始</div>
+      </div>`;
+      return;
+    }
+    chatListEl.innerHTML = store.items
+      .map((it) => {
+        const active = it.id === store.activeId ? "active" : "";
+        const when = it.updatedAt
+          ? new Date(it.updatedAt).toLocaleString(undefined, {
+              month: "numeric",
+              day: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+            })
+          : "";
+        return `<div class="chat-item ${active}" data-id="${escapeHtml(it.id)}">
+          <div class="title" title="${escapeHtml(it.title || "")}">${escapeHtml(it.title || "未命名")}</div>
+          <div class="meta">${escapeHtml(when)} · ${escapeHtml(shortPath(it.cwd || ""))}</div>
+          <div class="ops">
+            <button type="button" class="ghost-btn small" data-act="enter">进入</button>
+            <button type="button" class="ghost-btn small danger" data-act="del">删除</button>
+          </div>
+        </div>`;
+      })
+      .join("");
+
+    chatListEl.querySelectorAll(".chat-item[data-id]").forEach((el) => {
+      const id = el.dataset.id;
+      el.querySelector('[data-act="enter"]').addEventListener("click", (e) => {
+        e.stopPropagation();
+        enterChat(id);
+      });
+      el.querySelector('[data-act="del"]').addEventListener("click", (e) => {
+        e.stopPropagation();
+        deleteChat(id);
+      });
+      el.addEventListener("click", (e) => {
+        if (e.target.closest("button")) return;
+        enterChat(id);
+      });
+    });
+  }
+
+  function enterChat(id) {
+    const item = store.items.find((x) => x.id === id);
+    if (!item) return;
+    if (busy) {
+      addSystem("请先停止当前任务再切换对话。");
+      return;
+    }
+    if (item.id === sessionId && item.id === store.activeId) {
+      // already active — still re-render highlight
+      store.activeId = id;
+      saveStore(store);
+      renderChatList();
+      return;
+    }
+    clearChatUI();
+    store.activeId = id;
+    saveStore(store);
+    renderChatList();
+    addSystem("正在进入本地对话…");
+    wsSend({ type: "load_session", sessionId: id, cwd: item.cwd || cwd || homePath });
+  }
+
+  function deleteChat(id) {
+    const item = store.items.find((x) => x.id === id);
+    if (!item) return;
+    if (!confirm(`删除本地对话「${item.title || "未命名"}」？\n仅从本机列表移除，不会列出或同步云端。`)) {
+      return;
+    }
+    const wasActive = sessionId === id || store.activeId === id;
+    removeLocalChat(id);
+    if (wasActive) {
+      // start a fresh local chat
+      startNewChat();
+    }
+  }
+
+  function startNewChat() {
+    if (busy) {
+      addSystem("请先停止当前任务。");
+      return;
+    }
+    clearChatUI();
+    addSystem("正在创建新对话…");
+    wsSend({ type: "new_session", cwd: cwd || homePath || undefined });
+  }
+
+  // ── Layout toggles ────────────────────────────────────────────
+  function applyLayout() {
+    appEl.classList.toggle("sidebar-collapsed", !sidebarOpen);
+    appEl.classList.toggle("chat-rail-collapsed", !chatRailOpen);
+    sidebar.classList.toggle("open", sidebarOpen);
+    localStorage.setItem("gcw_sidebar", sidebarOpen ? "1" : "0");
+    localStorage.setItem("gcw_chat_rail", chatRailOpen ? "1" : "0");
+  }
+  applyLayout();
+  renderChatList();
 
   function setStatus(text, mode) {
     statusText.textContent = text;
     dot.className = "dot" + (mode ? " " + mode : "");
   }
-
   function scrollBottom() {
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
-
   function escapeHtml(s) {
     return String(s)
       .replace(/&/g, "&amp;")
@@ -94,7 +234,14 @@
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
   }
-
+  function shortPath(p) {
+    if (!p) return "";
+    if (p.length > 36) {
+      const segs = p.split("/").filter(Boolean);
+      return "…/" + segs.slice(-2).join("/");
+    }
+    return p;
+  }
   function renderMarkdown(text) {
     const escaped = escapeHtml(text);
     let html = escaped.replace(/```([\w-]*)\n([\s\S]*?)```/g, (_, lang, code) => {
@@ -103,7 +250,7 @@
     html = html.replace(/`([^`\n]+)`/g, "<code>$1</code>");
     html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
     const parts = html.split(/(<pre>[\s\S]*?<\/pre>)/g);
-    html = parts
+    return parts
       .map((part) => {
         if (part.startsWith("<pre>")) return part;
         return part
@@ -112,7 +259,6 @@
           .join("");
       })
       .join("");
-    return html;
   }
 
   function addSystem(text) {
@@ -136,6 +282,16 @@
     wireCopy(el, text);
     messagesEl.appendChild(el);
     scrollBottom();
+    // title from first user message
+    if (sessionId) {
+      const item = store.items.find((x) => x.id === sessionId);
+      if (!item || !item.title || item.title === "新对话") {
+        const t = text.trim().replace(/\s+/g, " ").slice(0, 40);
+        upsertLocalChat({ id: sessionId, title: t || "新对话", cwd, touch: true });
+      } else {
+        upsertLocalChat({ id: sessionId, cwd, touch: true });
+      }
+    }
   }
 
   function ensureAgentBubble() {
@@ -147,25 +303,48 @@
         <span>Grok</span>
         <button class="copy-btn" type="button" data-copy>复制</button>
       </div>
-      <div class="thought" style="display:none"></div>
+      <button type="button" class="think-toggle" style="display:none">
+        <span class="chev">▶</span>
+        <span class="think-label">展开思考过程</span>
+      </button>
+      <div class="thought"></div>
       <div class="body markdown"></div>`;
+    currentThinkToggle = currentAgentEl.querySelector(".think-toggle");
     currentThoughtEl = currentAgentEl.querySelector(".thought");
     currentAgentBody = currentAgentEl.querySelector(".body");
     agentBuf = "";
     thoughtBuf = "";
     wireCopy(currentAgentEl, () => agentBuf);
+
+    currentThinkToggle.addEventListener("click", () => {
+      const open = currentThoughtEl.classList.toggle("open");
+      currentThinkToggle.querySelector(".chev").textContent = open ? "▼" : "▶";
+      currentThinkToggle.querySelector(".think-label").textContent = open
+        ? "收起思考过程"
+        : "展开思考过程";
+    });
+
     messagesEl.appendChild(currentAgentEl);
   }
 
   function finishAgentBubble() {
-    if (currentAgentEl && currentThoughtEl && thoughtBuf) {
-      currentThoughtEl.style.display = "block";
-      currentThoughtEl.title = "点击展开/收起思考过程";
-      currentThoughtEl.onclick = () => currentThoughtEl.classList.toggle("open");
+    // keep bubble as history; just detach streaming pointers
+    if (currentThinkToggle && thoughtBuf.trim()) {
+      currentThinkToggle.style.display = "inline-flex";
+      // stay collapsed by default
+      currentThoughtEl.classList.remove("open");
+      currentThoughtEl.textContent = thoughtBuf;
+      currentThinkToggle.querySelector(".chev").textContent = "▶";
+      currentThinkToggle.querySelector(".think-label").textContent = "展开思考过程";
+    } else if (currentThinkToggle) {
+      currentThinkToggle.style.display = "none";
     }
     currentAgentEl = null;
     currentAgentBody = null;
     currentThoughtEl = null;
+    currentThinkToggle = null;
+    agentBuf = "";
+    thoughtBuf = "";
   }
 
   function wireCopy(el, getText) {
@@ -196,11 +375,10 @@
   function addTool(update) {
     const el = document.createElement("div");
     el.className = "msg tool";
-    const title = update.title || update.toolCallId || "tool";
     el.innerHTML = `
       <div class="tool-line">
         <span class="kind">${escapeHtml(update.kind || "tool")}</span>
-        <span class="title">${escapeHtml(title)}</span>
+        <span class="title">${escapeHtml(update.title || update.toolCallId || "tool")}</span>
         <span class="status">${escapeHtml(update.status || "")}</span>
       </div>`;
     el.dataset.toolId = update.toolCallId || "";
@@ -228,7 +406,7 @@
     busy = v;
     sendBtn.disabled = v;
     cancelBtn.disabled = !v;
-    clearBtn.disabled = v;
+    newChatBtn.disabled = v;
     if (v) setStatus("working…", "busy");
     else if (ws && ws.readyState === WebSocket.OPEN) setStatus(statusLine(), "ok");
   }
@@ -237,20 +415,9 @@
     return cwd ? shortPath(cwd) : "connected";
   }
 
-  function shortPath(p) {
-    if (!p) return "";
-    if (p.length > 40) {
-      const segs = p.split("/").filter(Boolean);
-      return "…/" + segs.slice(-2).join("/");
-    }
-    return p;
-  }
-
   function updateCwdBtn() {
     cwdBtn.textContent = "项目根：" + (cwd ? shortPath(cwd) : "…");
-    cwdBtn.title = cwd
-      ? "项目根（Agent 默认工作目录）\n" + cwd + "\n点击修改（很少用）"
-      : "设置项目根";
+    cwdBtn.title = cwd ? "项目根\n" + cwd : "设置项目根";
   }
 
   function clearChatUI() {
@@ -260,29 +427,12 @@
     thoughtBuf = "";
   }
 
-  function clearConversation() {
-    if (busy) {
-      addSystem("请先停止当前任务，再删除对话。");
-      return;
-    }
-    if (!confirm("删除当前对话？界面会清空，并在同一项目根下开新会话。")) return;
-    clearChatUI();
-    if (cwd) {
-      wsSend({ type: "set_cwd", cwd });
-      addSystem("已删除对话，新会话已开始。");
-    } else {
-      addSystem("已清空界面。");
-    }
-  }
-
-  // ── Selection + 引用 ──────────────────────────────────────────
-
+  // ── Selection / 引用 ──────────────────────────────────────────
   function setSelected(entry) {
     selected = entry
       ? { path: entry.path, name: entry.name, is_dir: !!entry.is_dir }
       : null;
     updateAttachBar();
-    // highlight row
     sideList.querySelectorAll(".row").forEach((row) => {
       row.classList.toggle("selected", !!(selected && row.dataset.path === selected.path));
     });
@@ -290,32 +440,25 @@
 
   function updateAttachBar() {
     if (!selected) {
-      attachBar.classList.remove("active");
       attachBar.classList.add("idle");
+      attachBar.classList.remove("active");
       attachName.textContent = "未选择";
-      attachPath.textContent = "点文件夹进入；点文件选中后可「引用」到输入框";
+      attachPath.textContent = "点文件夹进入；点文件选中后点「引用」";
       attachBtn.disabled = true;
       return;
     }
     attachBar.classList.remove("idle");
     attachBar.classList.add("active");
-    const kind = selected.is_dir ? "文件夹" : "文件";
-    attachName.textContent = `${kind} · ${selected.name}`;
+    attachName.textContent = `${selected.is_dir ? "文件夹" : "文件"} · ${selected.name}`;
     attachPath.textContent = selected.path;
-    // 文件和文件夹都可以引用路径
     attachBtn.disabled = false;
     attachBtn.textContent = selected.is_dir ? "引用此文件夹" : "引用";
   }
 
-  /**
-   * Insert path into composer — this is the Cursor-like "attach file as context".
-   * For the agent it is literally the absolute path in the user message.
-   */
   function citeSelected() {
     if (!selected) return;
     const path = selected.path + (selected.is_dir ? "/" : "");
     insertPath(path);
-    // brief feedback
     const prev = attachBtn.textContent;
     attachBtn.textContent = "已引用 ✓";
     setTimeout(() => {
@@ -331,13 +474,7 @@
     const before = val.slice(0, start);
     const after = val.slice(end);
     const needSpace = before.length && !/\s$/.test(before);
-    // Prefer a clear @path form so it reads like an attachment
-    let token = path;
-    if (!path.startsWith("@") && !before.endsWith("@")) {
-      // keep plain path — agent understands absolute paths well
-      token = path;
-    }
-    const insert = (needSpace ? " " : "") + token;
+    const insert = (needSpace ? " " : "") + path;
     inputEl.value = before + insert + after;
     const caret = (before + insert).length;
     inputEl.focus();
@@ -358,12 +495,6 @@
       browseParent = data.parent;
       sidePath.textContent = data.path;
       renderSideList(data.entries || []);
-      // re-apply selection highlight if still in this folder
-      if (selected) {
-        sideList.querySelectorAll(".row").forEach((row) => {
-          row.classList.toggle("selected", row.dataset.path === selected.path);
-        });
-      }
     } catch (e) {
       addSystem("列目录失败：" + e);
     }
@@ -375,10 +506,8 @@
       const icon = e.is_dir ? "📁" : "📄";
       const sel = selected && selected.path === e.path ? "selected" : "";
       rows.push(`
-        <div class="row ${sel}"
-             data-path="${escapeHtml(e.path)}"
-             data-name="${escapeHtml(e.name)}"
-             data-dir="${e.is_dir ? "1" : "0"}"
+        <div class="row ${sel}" data-path="${escapeHtml(e.path)}"
+             data-name="${escapeHtml(e.name)}" data-dir="${e.is_dir ? "1" : "0"}"
              title="${escapeHtml(e.path)}">
           <span class="icon">${icon}</span>
           <span class="name">${escapeHtml(e.name)}</span>
@@ -386,7 +515,6 @@
     }
     sideList.innerHTML =
       rows.join("") || `<div class="row"><span class="name">（空目录）</span></div>`;
-
     sideList.querySelectorAll(".row[data-path]").forEach((row) => {
       row.addEventListener("click", () => {
         const entry = {
@@ -395,34 +523,26 @@
           is_dir: row.dataset.dir === "1",
         };
         if (entry.is_dir) {
-          // 选中 + 进入文件夹
           setSelected(entry);
           loadSideList(entry.path);
         } else {
-          // 仅选中文件；底部出现蓝色「引用」
           setSelected(entry);
         }
       });
     });
   }
 
-  // ── Project root modal (rare) ─────────────────────────────────
-
+  // Project root modal
   async function openPicker(startPath) {
     picker.classList.add("open");
     await loadPicker(startPath || cwd || homePath || "/");
   }
-
   function closePicker() {
     picker.classList.remove("open");
   }
-
   async function loadPicker(path) {
     const res = await fetch(`/api/fs/list?path=${encodeURIComponent(path)}`);
-    if (!res.ok) {
-      addSystem("无法列出目录：" + (await res.text()));
-      return;
-    }
+    if (!res.ok) return;
     const data = await res.json();
     pickerCwd = data.path;
     pickerParent = data.parent;
@@ -447,19 +567,13 @@
 
   function useProjectRoot(path) {
     const p = path || pickerCwd;
-    if (!p || busy) {
-      if (busy) addSystem("任务进行中，请先停止再切换项目根。");
-      return;
-    }
+    if (!p || busy) return;
     clearChatUI();
-    wsSend({ type: "set_cwd", cwd: p });
+    wsSend({ type: "set_cwd", cwd: p }); // creates new session
     closePicker();
-    addSystem("项目根已切换：" + p);
-    loadSideList(p);
   }
 
   // ── WebSocket ─────────────────────────────────────────────────
-
   function connect() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
     ws = new WebSocket(`${proto}://${location.host}/ws`);
@@ -483,27 +597,63 @@
 
   function handleEvent(msg) {
     switch (msg.type) {
-      case "hello":
+      case "hello": {
         sessionId = msg.sessionId;
         cwd = msg.cwd || "";
         updateCwdBtn();
-        {
-          const auth = msg.auth || {};
-          const init = msg.init || {};
-          const who = auth.email || "not signed in";
-          const model = init.currentModelId || "";
-          setStatus(`${who}${model ? " · " + model : ""}`, auth.ok === false ? "err" : "ok");
-          if (auth.ok === false) {
-            addSystem("登录失败：请先在终端运行 grok 完成登录");
-          }
-        }
+        const auth = msg.auth || {};
+        const init = msg.init || {};
+        const who = auth.email || "not signed in";
+        const model = init.currentModelId || "";
+        setStatus(`${who}${model ? " · " + model : ""}`, auth.ok === false ? "err" : "ok");
         loadSideList(cwd || homePath || "/");
+
+        // If we have local chats, prefer restoring active; else register current session as local
+        if (store.activeId && store.items.some((x) => x.id === store.activeId)) {
+          // Don't auto-load on every reconnect if already same id
+          if (store.activeId !== sessionId) {
+            enterChat(store.activeId);
+          } else {
+            upsertLocalChat({ id: sessionId, cwd, touch: false });
+          }
+        } else if (sessionId) {
+          upsertLocalChat({ id: sessionId, title: "新对话", cwd, touch: false });
+        }
+        renderChatList();
         break;
+      }
       case "session":
         sessionId = msg.sessionId;
         cwd = msg.cwd || cwd;
         updateCwdBtn();
+        if (msg.fresh) {
+          upsertLocalChat({
+            id: sessionId,
+            title: "新对话",
+            cwd,
+            touch: true,
+          });
+          // if replacedFrom, drop dead id
+          if (msg.replacedFrom) {
+            removeLocalChat(msg.replacedFrom);
+            upsertLocalChat({ id: sessionId, title: "新对话", cwd, touch: true });
+          }
+        } else if (msg.loaded) {
+          upsertLocalChat({ id: sessionId, cwd, touch: true });
+        } else {
+          upsertLocalChat({ id: sessionId, cwd, touch: false });
+        }
         setStatus(statusLine(), "ok");
+        break;
+      case "session_load_start":
+        replaying = true;
+        clearChatUI();
+        addSystem("正在加载本地对话历史…");
+        break;
+      case "session_load_end":
+        replaying = false;
+        finishAgentBubble();
+        addSystem("已进入该对话。");
         break;
       case "session_update":
         handleSessionUpdate(msg.update || {});
@@ -515,10 +665,12 @@
       case "turn_end":
         setBusy(false);
         finishAgentBubble();
+        if (sessionId) upsertLocalChat({ id: sessionId, cwd, touch: true });
         break;
       case "error":
         addSystem("错误：" + (msg.message || "unknown"));
         setBusy(false);
+        replaying = false;
         break;
       case "permission":
         showPermission(msg);
@@ -534,17 +686,35 @@
 
   function handleSessionUpdate(update) {
     const kind = update.sessionUpdate;
-    if (kind === "agent_message_chunk") {
+    if (kind === "user_message_chunk") {
+      // history replay
+      const t = (update.content && update.content.text) || "";
+      if (t) {
+        // coalesce consecutive user chunks into one bubble when replaying is hard;
+        // simple approach: each chunk as append to last user or new
+        const last = messagesEl.lastElementChild;
+        if (last && last.classList.contains("user") && replaying) {
+          const body = last.querySelector(".body");
+          body.textContent = (body.textContent || "") + t;
+        } else {
+          addUser(t);
+        }
+      }
+    } else if (kind === "agent_message_chunk") {
       ensureAgentBubble();
-      agentBuf += (update.content && update.content.text) || "";
+      const t = (update.content && update.content.text) || "";
+      agentBuf += t;
       currentAgentBody.innerHTML = renderMarkdown(agentBuf);
       scrollBottom();
     } else if (kind === "agent_thought_chunk") {
       ensureAgentBubble();
-      thoughtBuf += (update.content && update.content.text) || "";
-      if (currentThoughtEl) {
-        currentThoughtEl.style.display = "block";
-        currentThoughtEl.textContent = thoughtBuf;
+      const t = (update.content && update.content.text) || "";
+      thoughtBuf += t;
+      // while streaming: keep collapsed, but show toggle once we have content
+      if (currentThinkToggle && thoughtBuf.trim()) {
+        currentThinkToggle.style.display = "inline-flex";
+        // only update hidden thought buffer text; don't open
+        if (currentThoughtEl) currentThoughtEl.textContent = thoughtBuf;
       }
       scrollBottom();
     } else if (kind === "tool_call") {
@@ -595,14 +765,23 @@
   }
 
   // ── Events ────────────────────────────────────────────────────
-
   sendBtn.addEventListener("click", send);
   cancelBtn.addEventListener("click", () => wsSend({ type: "cancel", sessionId }));
-  clearBtn.addEventListener("click", clearConversation);
+  newChatBtn.addEventListener("click", startNewChat);
   attachBtn.addEventListener("click", citeSelected);
 
-  toggleSidebar.addEventListener("click", () => setSidebar(!sidebarOpen));
-  sidebarClose.addEventListener("click", () => setSidebar(false));
+  toggleSidebar.addEventListener("click", () => {
+    sidebarOpen = !sidebarOpen;
+    applyLayout();
+  });
+  toggleChatRail.addEventListener("click", () => {
+    chatRailOpen = !chatRailOpen;
+    applyLayout();
+  });
+  sidebarClose.addEventListener("click", () => {
+    sidebarOpen = false;
+    applyLayout();
+  });
   sideUp.addEventListener("click", () => browseParent && loadSideList(browseParent));
   sideRefresh.addEventListener("click", () => loadSideList(browsePath));
   sideToProject.addEventListener("click", () => loadSideList(cwd || homePath || "/"));
@@ -615,6 +794,7 @@
     if (e.target === picker) closePicker();
   });
 
+  // Enter = send, Shift+Enter = newline
   inputEl.addEventListener("keydown", (e) => {
     if (acActive) {
       if (e.key === "ArrowDown") {
@@ -640,10 +820,11 @@
         return;
       }
     }
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       send();
     }
+    // Shift+Enter: default textarea newline
   });
 
   inputEl.addEventListener("input", () => {
@@ -729,7 +910,6 @@
     acEl.innerHTML = "";
   }
 
-  // Boot
   updateAttachBar();
   fetch("/api/defaults")
     .then((r) => r.json())
@@ -738,7 +918,7 @@
     })
     .catch(() => {})
     .finally(() => {
-      addSystem("右侧「引用文件」：点文件夹进入；点文件选中后点蓝色「引用」→ 路径写入输入框。");
+      addSystem("Enter 发送 · Shift+Enter 换行 · 思考默认折叠 · 左侧仅本地对话（进入/删除）");
       connect();
     });
 })();

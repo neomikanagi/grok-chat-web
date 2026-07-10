@@ -187,8 +187,34 @@ class ACPBridge:
         sid = result["sessionId"]
         self.session_id = sid
         self.cwd = cwd_path
-        await self._emit({"type": "session", "sessionId": sid, "cwd": cwd_path})
+        await self._emit({"type": "session", "sessionId": sid, "cwd": cwd_path, "fresh": True})
         return sid
+
+    async def load_session(self, session_id: str, cwd: str) -> str:
+        """Resume a previous ACP session (local list only; no cloud listing)."""
+        await self.ensure_running()
+        cwd_path = str(Path(cwd).expanduser().resolve())
+        if not Path(cwd_path).is_dir():
+            raise FileNotFoundError(f"cwd is not a directory: {cwd_path}")
+        # Client should clear UI first; agent replays history via session/update
+        await self._emit({"type": "session_load_start", "sessionId": session_id, "cwd": cwd_path})
+        await self.request(
+            "session/load",
+            {"sessionId": session_id, "cwd": cwd_path, "mcpServers": []},
+            timeout=120,
+        )
+        self.session_id = session_id
+        self.cwd = cwd_path
+        await self._emit(
+            {
+                "type": "session",
+                "sessionId": session_id,
+                "cwd": cwd_path,
+                "loaded": True,
+            }
+        )
+        await self._emit({"type": "session_load_end", "sessionId": session_id})
+        return session_id
 
     async def prompt(self, text: str, session_id: Optional[str] = None) -> dict[str, Any]:
         await self.ensure_running()

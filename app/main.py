@@ -303,8 +303,62 @@ async def ws_chat(ws: WebSocket) -> None:
                     async with _bridge_lock:
                         sid = await bridge.new_session(cwd)
                     await broadcast(
-                        {"type": "session", "sessionId": sid, "cwd": bridge.cwd}
+                        {
+                            "type": "session",
+                            "sessionId": sid,
+                            "cwd": bridge.cwd,
+                            "fresh": True,
+                        }
                     )
+
+                elif mtype == "new_session":
+                    cwd = msg.get("cwd") or bridge.cwd or default_cwd()
+                    async with _bridge_lock:
+                        sid = await bridge.new_session(cwd)
+                    await broadcast(
+                        {
+                            "type": "session",
+                            "sessionId": sid,
+                            "cwd": bridge.cwd,
+                            "fresh": True,
+                        }
+                    )
+
+                elif mtype == "load_session":
+                    sid = msg.get("sessionId")
+                    cwd = msg.get("cwd") or bridge.cwd or default_cwd()
+                    if not sid:
+                        await ws.send_text(
+                            json.dumps(
+                                {"type": "error", "message": "load_session needs sessionId"}
+                            )
+                        )
+                        continue
+                    async with _bridge_lock:
+                        try:
+                            await bridge.load_session(sid, cwd)
+                        except Exception as e:
+                            logger.exception("load_session failed")
+                            await broadcast(
+                                {
+                                    "type": "error",
+                                    "message": f"无法进入该对话（可能已失效）: {e}",
+                                }
+                            )
+                            # fall back: keep id in UI but start fresh same cwd
+                            try:
+                                newsid = await bridge.new_session(cwd)
+                                await broadcast(
+                                    {
+                                        "type": "session",
+                                        "sessionId": newsid,
+                                        "cwd": bridge.cwd,
+                                        "fresh": True,
+                                        "replacedFrom": sid,
+                                    }
+                                )
+                            except Exception as e2:
+                                await broadcast({"type": "error", "message": str(e2)})
 
                 elif mtype == "permission_reply":
                     req_id = msg.get("id")

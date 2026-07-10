@@ -4,10 +4,20 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Grok Chat Web</title>
-  <link rel="stylesheet" href="/static/style.css?v=3" />
+  <link rel="stylesheet" href="/static/style.css?v=4" />
 </head>
 <body>
   <div id="app" class="layout">
+    <!-- Left: local conversations only -->
+    <aside id="chatRail" class="chat-rail" aria-label="本地对话">
+      <div class="chat-rail-head">
+        <div class="sidebar-title">本地对话</div>
+        <button id="newChatBtn" class="primary-btn small" type="button" title="新建本地对话">＋ 新对话</button>
+      </div>
+      <div id="chatList" class="chat-list"></div>
+      <div class="chat-rail-foot">仅本机浏览器记录 · 不显示云端会话</div>
+    </aside>
+
     <div id="mainCol">
       <header>
         <div class="brand">Grok <span>Chat</span></div>
@@ -15,26 +25,25 @@
           <span id="dot" class="dot" title="connection"></span>
           <span id="statusText">connecting…</span>
         </div>
-        <button id="cwdBtn" class="cwd-btn" type="button" title="项目根（很少改）：Agent 默认工作目录">项目根：…</button>
-        <button id="clearBtn" class="ghost-btn danger" type="button" title="清空当前对话并开新会话">删除对话</button>
-        <button id="toggleSidebar" class="icon-btn" type="button" title="展开/折叠文件引用栏">📁</button>
+        <button id="cwdBtn" class="cwd-btn" type="button" title="项目根（很少改）">项目根：…</button>
+        <button id="toggleChatRail" class="icon-btn" type="button" title="对话列表">💬</button>
+        <button id="toggleSidebar" class="icon-btn" type="button" title="引用文件">📁</button>
       </header>
 
       <main id="messages" aria-live="polite"></main>
 
       <div id="composer-wrap">
         <div class="hint">
-          <span><kbd>Enter</kbd> 换行</span>
-          <span><kbd id="modKey">⌘</kbd>+<kbd>Enter</kbd> 发送</span>
-          <span>右侧选中文件后点「引用」→ 路径进入输入框</span>
-          <span>消息可复制</span>
+          <span><kbd>Enter</kbd> 发送</span>
+          <span><kbd>Shift</kbd>+<kbd>Enter</kbd> 换行</span>
+          <span>右侧引用文件 · 左侧管理本地对话</span>
         </div>
         <div id="composer-area">
           <div id="ac" role="listbox"></div>
           <div id="composer">
             <textarea
               id="input"
-              placeholder="随便写… 在右侧选中文件后点「引用」，相当于告诉 Grok：我们在聊这个文件。"
+              placeholder="Enter 发送 · Shift+Enter 换行。右侧选中文件后点「引用」。"
               autofocus
             ></textarea>
             <div class="composer-actions">
@@ -46,7 +55,6 @@
       </div>
     </div>
 
-    <!-- Right: file reference browser (not project-root manager) -->
     <aside id="sidebar" class="sidebar open" aria-label="引用文件">
       <div class="sidebar-head">
         <div class="sidebar-title">引用文件</div>
@@ -62,21 +70,19 @@
 
       <div id="sideList" class="side-list"></div>
 
-      <!-- Selection + attach action -->
       <div id="attachBar" class="attach-bar idle">
         <div class="attach-meta">
           <div class="attach-label">当前选中</div>
           <div id="attachName" class="attach-name">未选择</div>
           <div id="attachPath" class="attach-path"></div>
         </div>
-        <button id="attachBtn" class="primary-btn attach-btn" type="button" disabled title="把该路径插入输入框（告诉 Grok 我们在聊这个文件）">
+        <button id="attachBtn" class="primary-btn attach-btn" type="button" disabled title="把路径插入输入框">
           引用
         </button>
       </div>
     </aside>
   </div>
 
-  <!-- Rare: change project root (cwd) -->
   <div id="picker" class="modal-backdrop" role="dialog" aria-modal="true">
     <div class="modal">
       <header>
@@ -84,7 +90,7 @@
         <button id="pickerClose" class="ghost-btn" type="button">关闭</button>
       </header>
       <div class="modal-hint">
-        项目根 = Agent 默认工作目录（类似 Cursor 打开文件夹）。平时很少改；日常用右侧「引用」指具体文件即可。
+        项目根 = Agent 默认工作目录。平时很少改；日常用右侧「引用」指具体文件。
       </div>
       <div id="pickerPath" class="path-bar"></div>
       <div id="pickerList" class="list"></div>
@@ -95,6 +101,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=3"></script>
+  <script src="/static/app.js?v=4"></script>
 </body>
 </html>
