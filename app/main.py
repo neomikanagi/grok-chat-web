@@ -43,12 +43,15 @@ bridge = ACPBridge(
 GROK_CHAT_TOKEN = os.environ.get("GROK_CHAT_TOKEN") or None
 
 
+ROOTS_DIR = Path("/roots")
+
+
 def _project_roots() -> list[dict[str, str]]:
-    """Named quick-pick project roots (GROK_CHAT_ROOT_<n>_NAME/_PATH pairs),
-    in addition to whatever GROK_CHAT_CWD/default_cwd() resolves to. Each
-    must already be mounted into the container (see docker-compose.yml /
-    docker-compose.override.yml) -- this just lists them for the picker,
-    it doesn't grant any access the container filesystem doesn't already have.
+    """Quick-pick project roots for the UI switcher: the default
+    GROK_CHAT_CWD, plus one entry per subdirectory actually bind-mounted
+    under /roots. No separate NAME/PATH env vars to keep in sync --
+    whatever directory name you mount at /roots/<name> in docker-compose
+    IS the name shown, so it can't drift from what's actually there.
     """
     roots: list[dict[str, str]] = []
     seen: set[str] = set()
@@ -58,20 +61,15 @@ def _project_roots() -> list[dict[str, str]]:
     roots.append({"name": Path(default).name or "default", "path": default, "hint": default_hint})
     seen.add(default)
 
-    n = 1
-    while True:
-        path = os.environ.get(f"GROK_CHAT_ROOT_{n}_PATH")
-        if not path:
-            break
-        p = Path(path)
-        if p.is_dir():
-            resolved = str(p.resolve())
-            if resolved not in seen:
-                name = os.environ.get(f"GROK_CHAT_ROOT_{n}_NAME") or p.name
-                hint = os.environ.get(f"GROK_CHAT_ROOT_{n}_HINT") or ""
-                roots.append({"name": name, "path": resolved, "hint": hint})
-                seen.add(resolved)
-        n += 1
+    if ROOTS_DIR.is_dir():
+        for child in sorted(ROOTS_DIR.iterdir()):
+            if not child.is_dir():
+                continue
+            resolved = str(child.resolve())
+            if resolved in seen:
+                continue
+            roots.append({"name": child.name, "path": resolved, "hint": ""})
+            seen.add(resolved)
     return roots
 
 

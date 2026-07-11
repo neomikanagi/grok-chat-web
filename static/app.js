@@ -606,6 +606,10 @@
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       const items = data.items || [];
+      const footNote =
+        items.length > 1
+          ? `<div class="foot-note">名字取自 docker-compose 里 <code>/roots/&lt;名字&gt;</code> 挂载的目录名</div>`
+          : "";
       rootsMenu.innerHTML =
         items
           .map((it) => {
@@ -617,7 +621,7 @@
               <span class="path">${escapeHtml(it.path)}</span>
             </div>`;
           })
-          .join("") + browseRow;
+          .join("") + footNote + browseRow;
       rootsMenu.querySelectorAll(".row[data-path]").forEach((row) => {
         row.addEventListener("click", () => {
           const path = row.dataset.path;

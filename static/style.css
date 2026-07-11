@@ -658,6 +658,13 @@ header .brand span { color: var(--accent); }
 }
 .roots-menu .row.browse-other .name { font-weight: 400; }
 .roots-menu .empty { padding: 12px; font-size: 12px; color: var(--muted); }
+.roots-menu .foot-note {
+  padding: 6px 12px;
+  font-size: 10px;
+  color: var(--muted);
+  opacity: 0.7;
+}
+.roots-menu .foot-note code { font-family: var(--mono); }
 
 /* Project-root modal (rare) */
 .modal-backdrop {
