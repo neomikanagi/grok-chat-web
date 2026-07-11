@@ -2,6 +2,11 @@
 
 > Cursor / GrokBuild / Claude Code 共用。换棒时在**最上面**追加一条，不要删历史。
 
+## 2026-07-11 — claudecode → user (加"笔记仓库"第二个根)
+
+- **状态：** 成功。用户明确了想要的就两个：项目库（`workspaces`，已有）+ 笔记仓库。加了第二个根 `notes` → `/mnt/cache/SOCIAL_CALCULUS`（Obsidian 库），容器内挂载点 `/roots/notes`。`/api/project-roots` 现在返回 3 项：默认根、`workspaces`、`notes`。已用 `/api/fs/list?path=/roots/notes` 验证真能看到库内容（`00_Inbox`、`02_PersonalOS` 等）。
+- **改了：** `docker-compose.override.yml`（本地，不进 git）加了 `GROK_CHAT_ROOT_2_NAME=notes` / `GROK_CHAT_ROOT_2_PATH=/roots/notes` + 对应 volume。
+
 ## 2026-07-11 — claudecode → user (多项目根切换器 + 固定 IP)
 
 - **状态：** 成功。回答了"workspace 到底是哪" 的疑问——不是没映射，是当初（上一条 HANDOFF）故意只挂了 `grok-chat-web` 自己的项目目录（`GROK_CHAT_PROJECTS_DIR`），没给全量 `workspaces`，为了不在没问过你的情况下就把 `_secrets` 之类的东西一起暴露给一个刚上线、还没验证过的部署。现在按你的要求做了"可以选多个项目根"。
