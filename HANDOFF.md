@@ -2,6 +2,15 @@
 
 > Cursor / GrokBuild / Claude Code 共用。换棒时在**最上面**追加一条，不要删历史。
 
+## 2026-07-11 — claudecode → user (根切换器改单按钮 + 加宿主路径提示)
+
+- **状态：** 成功，用户截图证实了问题：之前"项目根"主按钮 + 旁边一个小"▾"是两个独立点击目标，窄屏（用户是 Sidecar）下基本看不出来是两个东西，用户一直点的是主按钮，弹出的是旧的"浏览任意路径"弹窗（只显示容器内部路径如 `/`、`/mnt`，看不出对应宿主机哪个盘）。
+- **改了：**
+  - `static/index.html`/`app.js` — 去掉单独的 `rootsToggle` 按钮，点主按钮"项目根"直接弹快捷根菜单，菜单最下面留一行"浏览其他路径…"打开旧的任意路径浏览
+  - `app/main.py` — 新增 `GROK_CHAT_ROOT_<n>_HINT`（默认根用 `GROK_CHAT_CWD_HINT`）环境变量，纯展示用的人话提示（比如"宿主 /mnt/cache/workspaces"），显示在菜单每一项下面
+  - `docker-compose.override.yml`（本地）——给三个根都配了 hint
+- **不要还原**：`cwdBtn` 现在身兼两职（点击弹快捷菜单，菜单里"浏览其他路径"才走旧的 `openPicker`）——这是故意合并成一个入口，不是漏删代码。
+
 ## 2026-07-11 — claudecode → user (加"笔记仓库"第二个根)
 
 - **状态：** 成功。用户明确了想要的就两个：项目库（`workspaces`，已有）+ 笔记仓库。加了第二个根 `notes` → `/mnt/cache/SOCIAL_CALCULUS`（Obsidian 库），容器内挂载点 `/roots/notes`。`/api/project-roots` 现在返回 3 项：默认根、`workspaces`、`notes`。已用 `/api/fs/list?path=/roots/notes` 验证真能看到库内容（`00_Inbox`、`02_PersonalOS` 等）。
