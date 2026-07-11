@@ -3,6 +3,7 @@
   const $ = (id) => document.getElementById(id);
 
   const appEl = $("app");
+  const railBackdrop = $("railBackdrop");
   const messagesEl = $("messages");
   const inputEl = $("input");
   const sendBtn = $("sendBtn");
@@ -42,8 +43,14 @@
   let homePath = "";
   let busy = false;
   let reconnectTimer = null;
-  let sidebarOpen = localStorage.getItem("gcw_sidebar") !== "0";
-  let chatRailOpen = localStorage.getItem("gcw_chat_rail") !== "0";
+  const isNarrow = window.innerWidth <= 860;
+  const savedSidebar = localStorage.getItem("gcw_sidebar");
+  const savedChatRail = localStorage.getItem("gcw_chat_rail");
+  // First visit on a phone/tablet: start with both rails closed so the chat
+  // itself isn't immediately obscured. Once the user has ever toggled
+  // either one, respect their saved choice regardless of screen size.
+  let sidebarOpen = savedSidebar !== null ? savedSidebar !== "0" : !isNarrow;
+  let chatRailOpen = savedChatRail !== null ? savedChatRail !== "0" : !isNarrow;
   let selected = null;
 
   /** @type {Array<{id,title,cwd,updatedAt,messageCount}>} */
@@ -593,11 +600,27 @@
 
   function closeRootsMenu() {
     rootsMenu.classList.remove("open");
+    window.removeEventListener("resize", positionRootsMenu);
+  }
+
+  function positionRootsMenu() {
+    // Fixed positioning computed here (not pure CSS) so the menu can
+    // never overflow the viewport regardless of where cwdBtn ends up
+    // sitting in the header at any screen width.
+    const btnRect = cwdBtn.getBoundingClientRect();
+    const width = Math.min(360, window.innerWidth - 16);
+    rootsMenu.style.width = width + "px";
+    let left = btnRect.right - width;
+    left = Math.max(8, Math.min(left, window.innerWidth - width - 8));
+    rootsMenu.style.left = left + "px";
+    rootsMenu.style.top = btnRect.bottom + 6 + "px";
   }
 
   async function loadRootsMenu() {
     rootsMenu.innerHTML = `<div class="empty">加载中…</div>`;
     rootsMenu.classList.add("open");
+    positionRootsMenu();
+    window.addEventListener("resize", positionRootsMenu);
     const browseRow = `<div class="row browse-other" data-browse="1">
       <span class="name">浏览其他路径…</span>
     </div>`;
@@ -862,6 +885,15 @@
     sidebarOpen = false;
     applyLayout();
   });
+  if (railBackdrop) {
+    railBackdrop.addEventListener("click", () => {
+      // Only meaningful on narrow screens where the backdrop is actually
+      // visible (see CSS), but harmless to just close both either way.
+      sidebarOpen = false;
+      chatRailOpen = false;
+      applyLayout();
+    });
+  }
   sideUp.addEventListener("click", () => browseParent && loadSideList(browseParent));
   sideRefresh.addEventListener("click", () => loadSideList(browsePath));
   sideToProject.addEventListener("click", () => loadSideList(cwd || homePath || "/"));

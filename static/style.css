@@ -288,7 +288,10 @@ header .brand span { color: var(--accent); }
   white-space: nowrap;
 }
 .cwd-btn {
-  max-width: 28%;
+  /* vw, not % -- this sits in an auto-sized flex item (.root-switcher),
+     and percentage max-width against an auto-basis flex parent doesn't
+     reliably resolve (observed: collapsed to near-zero on tablet widths). */
+  max-width: 28vw;
   overflow: hidden;
   text-overflow: ellipsis;
   font-family: var(--mono);
@@ -613,19 +616,21 @@ header .brand span { color: var(--accent); }
 }
 
 /* Multi-root switcher (Cursor-style "add folder to workspace" quick-pick) */
-.root-switcher { position: relative; display: flex; align-items: center; }
+.root-switcher { position: relative; display: flex; align-items: center; flex-shrink: 0; }
 .roots-menu {
+  /* position/left/top/width are computed in JS (positionRootsMenu) --
+     fixed rather than absolute so it's always placed relative to the
+     viewport and can never overflow off-screen regardless of where the
+     project-root button ends up sitting in the header. */
   display: none;
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
+  position: fixed;
   min-width: 220px;
   max-width: 360px;
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: 10px;
   box-shadow: 0 8px 24px rgba(0,0,0,0.35);
-  z-index: 40;
+  z-index: 42;
   overflow: hidden;
 }
 .roots-menu.open { display: block; }
@@ -730,12 +735,20 @@ header .brand span { color: var(--accent); }
 }
 .perm-card .actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 
+/* Backdrop behind an overlaid rail on narrow screens -- tap it to close.
+   Hidden by default; only shown (see breakpoints below) once a rail is
+   actually rendered as a fixed overlay instead of a grid column. */
+.rail-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  z-index: 39;
+}
+
 @media (max-width: 1100px) {
   .layout {
     grid-template-columns: 0px 1fr var(--sidebar-w);
-  }
-  .layout:not(.chat-rail-collapsed) {
-    /* still allow open overlay */
   }
   #chatRail {
     position: fixed;
@@ -747,6 +760,9 @@ header .brand span { color: var(--accent); }
   .layout.chat-rail-collapsed #chatRail {
     transform: translateX(-100%);
     opacity: 0;
+  }
+  .layout:not(.chat-rail-collapsed) .rail-backdrop {
+    display: block;
   }
 }
 @media (max-width: 860px) {
@@ -767,10 +783,47 @@ header .brand span { color: var(--accent); }
     transform: translateX(100%);
     opacity: 0;
   }
+  .layout:not(.sidebar-collapsed) .rail-backdrop {
+    display: block;
+  }
   .sidebar, #chatRail {
     transition: transform 0.18s ease, opacity 0.15s ease;
   }
   #composer { grid-template-columns: 1fr; }
   .composer-actions { flex-direction: row; }
-  .cwd-btn { max-width: 40%; }
+  .cwd-btn { max-width: 40vw; }
+
+  /* Touch targets: Apple/Google both recommend ~44px minimum hit area. */
+  .icon-btn, .ghost-btn, .primary-btn, .cwd-btn {
+    min-height: 40px;
+    padding: 8px 12px;
+  }
+  .chat-rail-head-actions .icon-btn,
+  header .icon-btn {
+    min-width: 40px;
+  }
+  .side-nav .ghost-btn.small { min-height: 36px; }
+
+  /* iOS Safari auto-zooms on focusing an <input>/<textarea> under 16px. */
+  #input { font-size: 16px; }
+
+  header {
+    padding: 10px 12px;
+    padding-top: max(10px, env(safe-area-inset-top));
+  }
+  #composer-wrap {
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+  }
+  .roots-menu { max-width: calc(100vw - 24px); }
+}
+
+@media (max-width: 480px) {
+  /* Phones: header is tight -- keep brand + root switcher + the two
+     rail toggles, drop the verbose connection-status text (the dot
+     alone still shows connection state at a glance). */
+  .status span:not(.dot) { display: none; }
+  .status { flex: 0 0 auto; gap: 0; }
+  header .brand { font-size: 14px; }
+  .cwd-btn { max-width: 34vw; font-size: 10px; }
+  .hint span:not(:last-child) { display: none; }
 }
