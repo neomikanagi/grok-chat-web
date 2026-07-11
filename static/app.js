@@ -10,7 +10,6 @@
   const statusText = $("statusText");
   const dot = $("dot");
   const cwdBtn = $("cwdBtn");
-  const rootsToggle = $("rootsToggle");
   const rootsMenu = $("rootsMenu");
   const newChatBtn = $("newChatBtn");
   const chatListEl = $("chatList");
@@ -599,33 +598,43 @@
   async function loadRootsMenu() {
     rootsMenu.innerHTML = `<div class="empty">加载中…</div>`;
     rootsMenu.classList.add("open");
+    const browseRow = `<div class="row browse-other" data-browse="1">
+      <span class="name">浏览其他路径…</span>
+    </div>`;
     try {
       const res = await apiFetch("/api/project-roots");
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       const items = data.items || [];
-      if (!items.length) {
-        rootsMenu.innerHTML = `<div class="empty">没有配置额外项目根（GROK_CHAT_ROOT_N_PATH）</div>`;
-        return;
-      }
-      rootsMenu.innerHTML = items
-        .map((it) => {
-          const isActive = it.path === (data.active || cwd);
-          return `<div class="row${isActive ? " active" : ""}" data-path="${escapeHtml(it.path)}">
-            <span class="name">${escapeHtml(it.name)}</span>
-            <span class="path">${escapeHtml(it.path)}</span>
-          </div>`;
-        })
-        .join("");
-      rootsMenu.querySelectorAll(".row").forEach((row) => {
+      rootsMenu.innerHTML =
+        items
+          .map((it) => {
+            const isActive = it.path === (data.active || cwd);
+            const hint = it.hint ? `<span class="hint">${escapeHtml(it.hint)}</span>` : "";
+            return `<div class="row${isActive ? " active" : ""}" data-path="${escapeHtml(it.path)}">
+              <span class="name">${escapeHtml(it.name)}</span>
+              ${hint}
+              <span class="path">${escapeHtml(it.path)}</span>
+            </div>`;
+          })
+          .join("") + browseRow;
+      rootsMenu.querySelectorAll(".row[data-path]").forEach((row) => {
         row.addEventListener("click", () => {
           const path = row.dataset.path;
           if (path && path !== cwd && !busy) wsSend({ type: "set_cwd", cwd: path });
           closeRootsMenu();
         });
       });
+      rootsMenu.querySelector(".browse-other").addEventListener("click", () => {
+        closeRootsMenu();
+        openPicker(cwd);
+      });
     } catch {
-      rootsMenu.innerHTML = `<div class="empty">加载项目根列表失败</div>`;
+      rootsMenu.innerHTML = `<div class="empty">加载项目根列表失败</div>` + browseRow;
+      rootsMenu.querySelector(".browse-other").addEventListener("click", () => {
+        closeRootsMenu();
+        openPicker(cwd);
+      });
     }
   }
 
@@ -852,8 +861,7 @@
   sideUp.addEventListener("click", () => browseParent && loadSideList(browseParent));
   sideRefresh.addEventListener("click", () => loadSideList(browsePath));
   sideToProject.addEventListener("click", () => loadSideList(cwd || homePath || "/"));
-  cwdBtn.addEventListener("click", () => openPicker(cwd));
-  rootsToggle.addEventListener("click", (e) => {
+  cwdBtn.addEventListener("click", (e) => {
     e.stopPropagation();
     if (rootsMenu.classList.contains("open")) {
       closeRootsMenu();
@@ -862,7 +870,7 @@
     }
   });
   document.addEventListener("click", (e) => {
-    if (!rootsMenu.contains(e.target) && e.target !== rootsToggle) closeRootsMenu();
+    if (!rootsMenu.contains(e.target) && e.target !== cwdBtn) closeRootsMenu();
   });
   $("pickerClose").addEventListener("click", closePicker);
   $("pickerUse").addEventListener("click", useProjectRoot);

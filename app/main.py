@@ -54,7 +54,8 @@ def _project_roots() -> list[dict[str, str]]:
     seen: set[str] = set()
 
     default = default_cwd()
-    roots.append({"name": Path(default).name or "default", "path": default})
+    default_hint = os.environ.get("GROK_CHAT_CWD_HINT") or ""
+    roots.append({"name": Path(default).name or "default", "path": default, "hint": default_hint})
     seen.add(default)
 
     n = 1
@@ -67,7 +68,8 @@ def _project_roots() -> list[dict[str, str]]:
             resolved = str(p.resolve())
             if resolved not in seen:
                 name = os.environ.get(f"GROK_CHAT_ROOT_{n}_NAME") or p.name
-                roots.append({"name": name, "path": resolved})
+                hint = os.environ.get(f"GROK_CHAT_ROOT_{n}_HINT") or ""
+                roots.append({"name": name, "path": resolved, "hint": hint})
                 seen.add(resolved)
         n += 1
     return roots
