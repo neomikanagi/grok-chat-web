@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Grok Chat Web</title>
+  <link rel="stylesheet" href="/static/style.css?v=13" />
+</head>
+<body>
+  <div id="app" class="layout">
+    <div id="railBackdrop" class="rail-backdrop"></div>
+    <!-- Left: conversations on THIS SERVER (disk), collapsible like right -->
+    <aside id="chatRail" class="chat-rail open" aria-label="本机对话">
+      <div class="chat-rail-head">
+        <div class="sidebar-title">本机对话</div>
+        <div class="chat-rail-head-actions">
+          <button id="newChatBtn" class="primary-btn small" type="button" title="新建对话（存服务器）">＋</button>
+          <button id="chatRailClose" class="icon-btn" type="button" title="折叠">⟨</button>
+        </div>
+      </div>
+      <div id="chatList" class="chat-list"></div>
+      <div class="chat-rail-foot">存于本机服务器磁盘 · 不显示云端会话</div>
+    </aside>
+
+    <div id="mainCol">
+      <header>
+        <div class="brand">Grok <span>Chat</span></div>
+        <div class="status">
+          <span id="dot" class="dot" title="connection"></span>
+          <span id="statusText">connecting…</span>
+        </div>
+        <div class="root-switcher">
+          <button id="cwdBtn" class="cwd-btn" type="button" title="项目根：点击切换 / 浏览任意路径">项目根：…</button>
+          <div id="rootsMenu" class="roots-menu" role="menu"></div>
+        </div>
+        <button id="toggleChatRail" class="icon-btn" type="button" title="展开/折叠对话列表">💬</button>
+        <button id="toggleSidebar" class="icon-btn" type="button" title="展开/折叠引用文件">📁</button>
+      </header>
+
+      <main id="messages" aria-live="polite"></main>
+
+      <div id="composer-wrap">
+        <div class="hint">
+          <span><kbd>Enter</kbd> 发送</span>
+          <span><kbd>Shift</kbd>+<kbd>Enter</kbd> 换行</span>
+          <span>右侧引用文件 · 左侧管理本地对话</span>
+        </div>
+        <div id="composer-area">
+          <div id="ac" role="listbox"></div>
+          <div id="composer">
+            <textarea
+              id="input"
+              placeholder="Enter 发送 · Shift+Enter 换行。右侧选中文件后点「引用」。"
+              autofocus
+            ></textarea>
+            <div class="composer-actions">
+              <button id="sendBtn" class="primary-btn" type="button">发送</button>
+              <button id="cancelBtn" class="ghost-btn" type="button" disabled>停止</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <aside id="sidebar" class="sidebar open" aria-label="引用文件">
+      <div class="sidebar-head">
+        <div class="sidebar-title">引用文件</div>
+        <button id="sidebarClose" class="icon-btn" type="button" title="折叠">⟩</button>
+      </div>
+
+      <div id="sidePath" class="path-bar" title="当前浏览位置"></div>
+      <div class="side-nav">
+        <button id="sideUp" class="ghost-btn small" type="button">上级</button>
+        <button id="sideRefresh" class="ghost-btn small" type="button">刷新</button>
+        <button id="sideToProject" class="ghost-btn small" type="button" title="跳到项目根浏览">项目根</button>
+      </div>
+
+      <div id="sideList" class="side-list"></div>
+
+      <div id="attachBar" class="attach-bar idle">
+        <div class="attach-meta">
+          <div class="attach-label">当前选中</div>
+          <div id="attachName" class="attach-name">未选择</div>
+          <div id="attachPath" class="attach-path"></div>
+        </div>
+        <button id="attachBtn" class="primary-btn attach-btn" type="button" disabled title="把路径插入输入框">
+          引用
+        </button>
+      </div>
+    </aside>
+  </div>
+
+  <div id="picker" class="modal-backdrop" role="dialog" aria-modal="true">
+    <div class="modal">
+      <header>
+        <div class="brand">设置项目根</div>
+        <button id="pickerClose" class="ghost-btn" type="button">关闭</button>
+      </header>
+      <div class="modal-hint">
+        项目根 = Agent 默认工作目录。平时很少改；日常用右侧「引用」指具体文件。
+      </div>
+      <div id="pickerPath" class="path-bar"></div>
+      <div id="pickerList" class="list"></div>
+      <footer>
+        <button id="pickerUp" class="ghost-btn" type="button">上级</button>
+        <button id="pickerUse" class="primary-btn" type="button">设为项目根（新会话）</button>
+      </footer>
+    </div>
+  </div>
+
+  <script src="/static/app.js?v=12"></script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+[project]
+name = "grok-chat-web"
+version = "0.1.0"
+description = "Browser chat shell for Grok Build (ACP) — copy, multiline, @paths"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.139.0",
+    "uvicorn[standard]>=0.51.0",
+]
+
+[project.scripts]
+grok-chat-web = "app.main:app"
