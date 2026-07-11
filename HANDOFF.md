@@ -2,6 +2,19 @@
 
 > Cursor / GrokBuild / Claude Code 共用。换棒时在**最上面**追加一条，不要删历史。
 
+## 2026-07-11 — claudecode → user (修复：run_terminal_command 全挂，"failed to deserialize response")
+
+- **状态：** 成功。端到端验证：WS 发 prompt 让 grok 执行 `echo grok-terminal-ok && uname -m`，tool_call `status=completed`、`exit_code=0`、输出正确回显，无反序列化报错。
+- **根因：** `acp_bridge.py` initialize 时向 grok agent 声明了 `clientCapabilities.terminal: true`，但 `_handle_agent_request` 一个 `terminal/*` 方法都没实现——grok 发来 `terminal/create` 落进"未知请求回空 `{}`"的兜底，grok CLI 拿不到 `terminalId` 反序列化失败，报 `IO Error: Internal error: "failed to deserialize response"`。**症状看着像 shell 坏了，其实是 bridge 谎报能力。**
+- **改了（都在 `app/acp_bridge.py`）：**
+  - 新增 `_Terminal` 类 + `_terminal_create()`：实现 ACP `terminal/create|output|wait_for_exit|kill|release` 全套（schema 字段名 `terminalId`/`outputByteLimit`/`exitStatus`/`exitCode` 已从 grok 二进制 strings 反查确认）；输出按 `outputByteLimit`（默认 1MiB）从头截断保尾；kill 用 `killpg` 杀整个进程组
+  - agent→client 请求改为**独立 task 处理**：`terminal/wait_for_exit` 会阻塞到命令结束，原来内联在 reader loop 里处理会死锁（读循环卡住，连 `terminal/kill` 都收不进来）
+  - 未知 agent 请求的兜底从"回空 `{}` 装成功"改成回 `-32601` 错误——空对象正是本次事故的直接原因，装成功只会把错误往后挪成更难查的形态
+  - `stop()` 时 release 所有存活 terminal
+- **另改（本地 override，不进 git）：** 补挂 `/mnt/cache/persistent-dev/docs` → `/roots/docs`，grok 可自维护 `grok-host-migration-known-issues.md`（故障自记录，宿主真身在 `persistent-dev/docs/`）。**只挂 docs 子目录**，不挂整个 persistent-dev（里面有 claude-home/grok-home 敏感数据）。
+- **顺手清理：** 容器 overlay 里 grok 误写的 `/mnt/user/...` 假路径已删；仓库里未跟踪的 `scripts/find-cpu1-hog.sh`（grok 的临时排查脚本）已删。
+- **不要还原：** 未知请求回错误而不是回空 `{}` 是刻意的；`terminal: true` 能力声明现在是真的，别删实现改回假声明。
+
 ## 2026-07-11 — claudecode → user (修复：auto-approve 改了不生效，无限弹批准窗)
 
 - **状态：** 成功。`/api/health` 验证 `always_approve: true`，agent 正常。

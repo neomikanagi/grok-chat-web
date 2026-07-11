@@ -6,12 +6,76 @@ import asyncio
 import json
 import logging
 import os
+import signal as _signal
+import uuid
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
 logger = logging.getLogger("grok_chat.acp")
 
 EventHandler = Callable[[dict[str, Any]], Awaitable[None]]
+
+DEFAULT_OUTPUT_BYTE_LIMIT = 1_048_576
+
+
+class _Terminal:
+    """One agent-requested command (ACP terminal/*) with byte-capped rolling output."""
+
+    def __init__(self, proc: asyncio.subprocess.Process, output_byte_limit: int) -> None:
+        self.proc = proc
+        self.limit = output_byte_limit
+        self.buf = bytearray()
+        self.truncated = False
+        self.exit_status: Optional[dict[str, Any]] = None
+        self._done = asyncio.Event()
+        self._pump_task = asyncio.create_task(self._pump())
+
+    async def _pump(self) -> None:
+        assert self.proc.stdout
+        while True:
+            chunk = await self.proc.stdout.read(65536)
+            if not chunk:
+                break
+            self.buf.extend(chunk)
+            if len(self.buf) > self.limit:
+                # ACP: truncate from the beginning, keep the tail
+                del self.buf[: len(self.buf) - self.limit]
+                self.truncated = True
+        rc = await self.proc.wait()
+        if rc is not None and rc < 0:
+            try:
+                sig_name = _signal.Signals(-rc).name
+            except ValueError:
+                sig_name = f"SIG{-rc}"
+            self.exit_status = {"exitCode": None, "signal": sig_name}
+        else:
+            self.exit_status = {"exitCode": rc, "signal": None}
+        self._done.set()
+
+    def output(self) -> dict[str, Any]:
+        return {
+            "output": self.buf.decode("utf-8", errors="replace"),
+            "truncated": self.truncated,
+            "exitStatus": self.exit_status,
+        }
+
+    async def wait_for_exit(self) -> dict[str, Any]:
+        await self._done.wait()
+        assert self.exit_status is not None
+        return self.exit_status
+
+    def kill(self) -> None:
+        if self.proc.returncode is None:
+            try:
+                os.killpg(os.getpgid(self.proc.pid), _signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                try:
+                    self.proc.kill()
+                except ProcessLookupError:
+                    pass
+
+    def release(self) -> None:
+        self.kill()
 
 
 class ACPBridge:
@@ -34,6 +98,8 @@ class ACPBridge:
         self._pending: dict[int, asyncio.Future] = {}
         self._write_lock = asyncio.Lock()
         self._handlers: list[EventHandler] = []
+        self._terminals: dict[str, _Terminal] = {}
+        self._agent_req_tasks: set[asyncio.Task] = set()
         self._started = False
         self.session_id: Optional[str] = None
         self.cwd: Optional[str] = None
@@ -148,6 +214,9 @@ class ACPBridge:
 
     async def stop(self) -> None:
         self._started = False
+        for term in self._terminals.values():
+            term.release()
+        self._terminals.clear()
         if self._reader_task:
             self._reader_task.cancel()
         if self._stderr_task:
@@ -327,9 +396,13 @@ class ACPBridge:
         if not method:
             return
 
-        # Incoming request from agent (needs reply)
+        # Incoming request from agent (needs reply). Run in its own task:
+        # terminal/wait_for_exit blocks until the command finishes, and the
+        # reader loop must keep consuming messages (e.g. terminal/kill).
         if "id" in msg and method:
-            await self._handle_agent_request(msg)
+            task = asyncio.create_task(self._handle_agent_request(msg))
+            self._agent_req_tasks.add(task)
+            task.add_done_callback(self._agent_req_tasks.discard)
             return
 
         # Notification
@@ -403,9 +476,42 @@ class ACPBridge:
                 await self.reply(req_id, error={"code": -32000, "message": str(e)})
             return
 
-        # Unknown agent→client request: acknowledge empty to avoid hangs
+        if method == "terminal/create":
+            try:
+                tid = await self._terminal_create(params)
+                await self.reply(req_id, {"terminalId": tid})
+            except Exception as e:
+                await self.reply(req_id, error={"code": -32000, "message": str(e)})
+            return
+
+        if method in ("terminal/output", "terminal/wait_for_exit", "terminal/kill", "terminal/release"):
+            term = self._terminals.get(params.get("terminalId") or "")
+            if term is None:
+                await self.reply(
+                    req_id,
+                    error={"code": -32000, "message": f"unknown terminalId: {params.get('terminalId')}"},
+                )
+                return
+            if method == "terminal/output":
+                await self.reply(req_id, term.output())
+            elif method == "terminal/wait_for_exit":
+                await self.reply(req_id, await term.wait_for_exit())
+            elif method == "terminal/kill":
+                term.kill()
+                await self.reply(req_id, {})
+            else:  # terminal/release
+                term.release()
+                self._terminals.pop(params.get("terminalId"), None)
+                await self.reply(req_id, {})
+            return
+
+        # Unknown agent→client request: report it instead of faking success —
+        # an empty {} result breaks the agent's response deserialization.
         logger.warning("unhandled agent request: %s", method)
-        await self.reply(req_id, {})
+        await self.reply(
+            req_id,
+            error={"code": -32601, "message": f"method not supported by client: {method}"},
+        )
         await self._emit(
             {
                 "type": "agent_request",
@@ -414,6 +520,46 @@ class ACPBridge:
                 "params": params,
             }
         )
+
+    async def _terminal_create(self, params: dict[str, Any]) -> str:
+        command = params.get("command") or ""
+        args = params.get("args") or []
+        cwd = params.get("cwd") or self.cwd or os.getcwd()
+        if not Path(cwd).is_dir():
+            raise FileNotFoundError(f"cwd is not a directory: {cwd}")
+        env = dict(os.environ)
+        for pair in params.get("env") or []:
+            name = pair.get("name")
+            if name:
+                env[name] = pair.get("value") or ""
+        limit = params.get("outputByteLimit") or DEFAULT_OUTPUT_BYTE_LIMIT
+
+        if args:
+            proc = await asyncio.create_subprocess_exec(
+                command,
+                *[str(a) for a in args],
+                cwd=cwd,
+                env=env,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                start_new_session=True,
+            )
+        else:
+            # No args: treat command as a shell line (covers both "ls" and "ls -la | wc")
+            proc = await asyncio.create_subprocess_shell(
+                command,
+                cwd=cwd,
+                env=env,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                start_new_session=True,
+            )
+        tid = f"term-{uuid.uuid4().hex[:12]}"
+        self._terminals[tid] = _Terminal(proc, limit)
+        logger.info("terminal/create %s: %s %s (cwd=%s)", tid, command, args, cwd)
+        return tid
 
 
 def _pick_allow_option(options: list[dict[str, Any]]) -> str:
