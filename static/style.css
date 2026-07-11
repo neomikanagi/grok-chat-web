@@ -612,6 +612,48 @@ header .brand span { color: var(--accent); }
   box-shadow: 0 0 0 1px rgba(124, 156, 255, 0.35), 0 4px 14px rgba(124, 156, 255, 0.2);
 }
 
+/* Multi-root switcher (Cursor-style "add folder to workspace" quick-pick) */
+.root-switcher { position: relative; display: flex; align-items: center; }
+.roots-menu {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 220px;
+  max-width: 360px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  z-index: 40;
+  overflow: hidden;
+}
+.roots-menu.open { display: block; }
+.roots-menu .row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 9px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+}
+.roots-menu .row:last-child { border-bottom: none; }
+.roots-menu .row:hover { background: rgba(124,156,255,0.1); }
+.roots-menu .row.active { color: var(--accent, #7c9cff); }
+.roots-menu .row .name { font-weight: 600; }
+.roots-menu .row .path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+.roots-menu .empty { padding: 12px; font-size: 12px; color: var(--muted); }
+
 /* Project-root modal (rare) */
 .modal-backdrop {
   position: fixed;

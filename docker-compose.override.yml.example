@@ -10,6 +10,19 @@ services:
         max-file: "1"
     dns:
       - 172.20.0.53   # your DNS server, e.g. a local AdGuard/Pi-hole
+    # Optional extra quick-pick project roots, shown in the UI's root
+    # switcher alongside the default GROK_CHAT_CWD. Repeat _2, _3, ... for
+    # more. Each needs a matching volume mount below.
+    environment:
+      - GROK_CHAT_ROOT_1_NAME=workspaces
+      - GROK_CHAT_ROOT_1_PATH=/roots/workspaces
+    volumes:
+      - /path/on/host/workspaces:/roots/workspaces
+    # Static IP so restarts don't shuffle it (useful if anything on your
+    # network refers to this container by IP instead of container name).
+    networks:
+      default:
+        ipv4_address: 172.20.0.4
 
 networks:
   default:

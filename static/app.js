@@ -10,6 +10,8 @@
   const statusText = $("statusText");
   const dot = $("dot");
   const cwdBtn = $("cwdBtn");
+  const rootsToggle = $("rootsToggle");
+  const rootsMenu = $("rootsMenu");
   const newChatBtn = $("newChatBtn");
   const chatListEl = $("chatList");
   const toggleChatRail = $("toggleChatRail");
@@ -590,6 +592,43 @@
     closePicker();
   }
 
+  function closeRootsMenu() {
+    rootsMenu.classList.remove("open");
+  }
+
+  async function loadRootsMenu() {
+    rootsMenu.innerHTML = `<div class="empty">加载中…</div>`;
+    rootsMenu.classList.add("open");
+    try {
+      const res = await apiFetch("/api/project-roots");
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      const items = data.items || [];
+      if (!items.length) {
+        rootsMenu.innerHTML = `<div class="empty">没有配置额外项目根（GROK_CHAT_ROOT_N_PATH）</div>`;
+        return;
+      }
+      rootsMenu.innerHTML = items
+        .map((it) => {
+          const isActive = it.path === (data.active || cwd);
+          return `<div class="row${isActive ? " active" : ""}" data-path="${escapeHtml(it.path)}">
+            <span class="name">${escapeHtml(it.name)}</span>
+            <span class="path">${escapeHtml(it.path)}</span>
+          </div>`;
+        })
+        .join("");
+      rootsMenu.querySelectorAll(".row").forEach((row) => {
+        row.addEventListener("click", () => {
+          const path = row.dataset.path;
+          if (path && path !== cwd && !busy) wsSend({ type: "set_cwd", cwd: path });
+          closeRootsMenu();
+        });
+      });
+    } catch {
+      rootsMenu.innerHTML = `<div class="empty">加载项目根列表失败</div>`;
+    }
+  }
+
   // ── WebSocket ─────────────────────────────────────────────────
   function connect() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -814,6 +853,17 @@
   sideRefresh.addEventListener("click", () => loadSideList(browsePath));
   sideToProject.addEventListener("click", () => loadSideList(cwd || homePath || "/"));
   cwdBtn.addEventListener("click", () => openPicker(cwd));
+  rootsToggle.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (rootsMenu.classList.contains("open")) {
+      closeRootsMenu();
+    } else {
+      loadRootsMenu();
+    }
+  });
+  document.addEventListener("click", (e) => {
+    if (!rootsMenu.contains(e.target) && e.target !== rootsToggle) closeRootsMenu();
+  });
   $("pickerClose").addEventListener("click", closePicker);
   $("pickerUse").addEventListener("click", useProjectRoot);
   $("pickerUp").addEventListener("click", () => pickerParent && loadPicker(pickerParent));

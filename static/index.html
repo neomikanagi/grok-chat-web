@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Grok Chat Web</title>
-  <link rel="stylesheet" href="/static/style.css?v=6" />
+  <link rel="stylesheet" href="/static/style.css?v=7" />
 </head>
 <body>
   <div id="app" class="layout">
@@ -28,7 +28,11 @@
           <span id="dot" class="dot" title="connection"></span>
           <span id="statusText">connecting…</span>
         </div>
-        <button id="cwdBtn" class="cwd-btn" type="button" title="项目根（很少改）">项目根：…</button>
+        <div class="root-switcher">
+          <button id="cwdBtn" class="cwd-btn" type="button" title="项目根（点击浏览任意路径）">项目根：…</button>
+          <button id="rootsToggle" class="icon-btn" type="button" title="切换到其它项目根">▾</button>
+          <div id="rootsMenu" class="roots-menu" role="menu"></div>
+        </div>
         <button id="toggleChatRail" class="icon-btn" type="button" title="展开/折叠对话列表">💬</button>
         <button id="toggleSidebar" class="icon-btn" type="button" title="展开/折叠引用文件">📁</button>
       </header>
@@ -104,6 +108,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=7"></script>
+  <script src="/static/app.js?v=8"></script>
 </body>
 </html>

@@ -43,6 +43,36 @@ bridge = ACPBridge(
 GROK_CHAT_TOKEN = os.environ.get("GROK_CHAT_TOKEN") or None
 
 
+def _project_roots() -> list[dict[str, str]]:
+    """Named quick-pick project roots (GROK_CHAT_ROOT_<n>_NAME/_PATH pairs),
+    in addition to whatever GROK_CHAT_CWD/default_cwd() resolves to. Each
+    must already be mounted into the container (see docker-compose.yml /
+    docker-compose.override.yml) -- this just lists them for the picker,
+    it doesn't grant any access the container filesystem doesn't already have.
+    """
+    roots: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    default = default_cwd()
+    roots.append({"name": Path(default).name or "default", "path": default})
+    seen.add(default)
+
+    n = 1
+    while True:
+        path = os.environ.get(f"GROK_CHAT_ROOT_{n}_PATH")
+        if not path:
+            break
+        p = Path(path)
+        if p.is_dir():
+            resolved = str(p.resolve())
+            if resolved not in seen:
+                name = os.environ.get(f"GROK_CHAT_ROOT_{n}_NAME") or p.name
+                roots.append({"name": name, "path": resolved})
+                seen.add(resolved)
+        n += 1
+    return roots
+
+
 def _request_token(request: Request) -> Optional[str]:
     auth = request.headers.get("authorization", "")
     if auth.lower().startswith("bearer "):
@@ -178,6 +208,11 @@ async def defaults() -> dict[str, Any]:
         "newline_key": "shift+enter",
         "always_approve": bridge.always_approve,
     }
+
+
+@app.get("/api/project-roots", dependencies=[Depends(require_token)])
+async def project_roots() -> dict[str, Any]:
+    return {"items": _project_roots(), "active": bridge.cwd or default_cwd()}
 
 
 @app.get("/api/conversations", dependencies=[Depends(require_token)])
