@@ -5,14 +5,16 @@ services:
     restart: unless-stopped
     ports:
       # Loopback-only by default -- this service can read arbitrary files
-      # under GROK_CHAT_CWD and (with GROK_CHAT_AUTO_APPROVE=1) run tools
-      # with no per-action gate. Only bind a non-loopback address once
-      # GROK_CHAT_TOKEN is set, e.g. BIND_ADDR=0.0.0.0 in .env.
+      # under the mounted project roots and (with GROK_CHAT_AUTO_APPROVE=1)
+      # run tools with no per-action gate. Only bind a non-loopback address
+      # once GROK_CHAT_TOKEN is set, e.g. BIND_ADDR=0.0.0.0 in .env.
       - "${BIND_ADDR:-127.0.0.1}:${PORT:-8787}:8787"
     environment:
       - GROK_HOME=/opt/grok-home
       - GROK_BIN=/opt/grok-home/bin/grok
-      - GROK_CHAT_CWD=${GROK_CHAT_CWD:-/workspace}
+      # Must resolve to a directory bind-mounted under /roots/ in
+      # docker-compose.override.yml (project roots = exactly those mounts).
+      - GROK_CHAT_CWD=${GROK_CHAT_CWD}
       - GROK_CHAT_TOKEN=${GROK_CHAT_TOKEN:-}
       - GROK_CHAT_MODEL=${GROK_CHAT_MODEL:-}
       - GROK_CHAT_AUTO_APPROVE=${GROK_CHAT_AUTO_APPROVE:-1}
@@ -22,7 +24,7 @@ services:
       # `grok` once on the host first so ~/.grok/auth.json exists). The
       # proprietary grok binary is never baked into the image.
       - ${GROK_HOME_DIR:-~/.grok}:/opt/grok-home
-      # Project directory grok-chat-web should browse/edit by default.
-      - ${GROK_CHAT_PROJECTS_DIR:-.}:/workspace
       # Local conversation history (JSON files), not shipped in the image.
       - ./data:/app/data
+      # Project roots are added in docker-compose.override.yml as
+      # /roots/<name> mounts -- that's the whitelist the UI/API enforce.

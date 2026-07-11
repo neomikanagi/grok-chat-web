@@ -20,19 +20,24 @@
 ## 部署（Docker，推荐）
 
 ```bash
-cp .env.example .env   # 按需改 GROK_CHAT_TOKEN / GROK_CHAT_PROJECTS_DIR
+cp .env.example .env   # 按需改 GROK_CHAT_TOKEN
+cp docker-compose.override.yml.example docker-compose.override.yml  # 加项目根，见下
 docker compose up -d --build
 ```
 
 - 默认监听 `8787`：http://127.0.0.1:8787/
 - `grok` 二进制本身**不会**打进镜像（属于 xAI 的专有 CLI，不能随意分发）——容器通过挂载宿主已登录好的 `~/.grok` 目录来复用它，见 `docker-compose.yml` 里的 `GROK_HOME_DIR`
-- `GROK_CHAT_PROJECTS_DIR` 决定容器里 `/workspace` 挂载哪个宿主目录，也就是 grok 默认能读写的项目根
+- **项目根 = 挂载进容器的目录，挂几个就是几个。** 没有单独的"设为项目根"操作，也没有浏览容器内部任意路径的入口——`/roots/` 之外的容器内部路径（`/`、`/app`、`/opt` 等）对 UI 和 API 完全不可见（后端白名单强制，403）。在 `docker-compose.override.yml` 里加：
+  ```yaml
+  volumes:
+    - /宿主路径A:/roots/名字A
+    - /宿主路径B:/roots/名字B
+  ```
+  重启后右侧文件树就会显示 `名字A`、`名字B` 两个根，名字直接取自挂载目录名。默认工作目录用 `.env` 里的 `GROK_CHAT_CWD` 指定，必须是某个 `/roots/<名字>` 下的路径。
 - 对话记录落在 `./data`（宿主目录，已在 `.gitignore` 里排除，不会被提交）
-- 想接进自己已有的 Docker 网络 / 固定重启策略 / 日志大小 / DNS：复制 `docker-compose.override.yml.example` 为 `docker-compose.override.yml`（已 gitignore）按需改，Compose 会自动叠加它，不用改 `docker-compose.yml` 本体
-- 想加更多可切换的项目根：同一个 override 文件里加 `-v /宿主路径:/roots/名字` 就行，不用配对应的环境变量——挂载在 `/roots/` 下的每个子目录都会自动出现在切换菜单里，名字直接取自挂载目录名（不会出现名字和实际路径对不上的情况）
-- 默认根（`GROK_CHAT_CWD`）看不出对应宿主机哪个目录？可选加 `GROK_CHAT_CWD_HINT` 写一句人话提示，显示在切换菜单里
+- 想接进自己已有的 Docker 网络 / 固定重启策略 / 日志大小 / DNS：同一个 `docker-compose.override.yml` 按需改，Compose 会自动叠加它，不用改 `docker-compose.yml` 本体
 
-**鉴权：** 只要服务监听地址不是 `127.0.0.1`（比如暴露给局域网或反代到公网），任何能连上的人都能直接读 `GROK_CHAT_CWD` 下任意文件、驱动 agent 自动批准任意工具调用。默认**不鉴权**（向后兼容单机场景），建议凡是监听非 loopback 地址就设置 `GROK_CHAT_TOKEN`：
+**鉴权：** 只要服务监听地址不是 `127.0.0.1`（比如暴露给局域网或反代到公网），任何能连上的人都能直接读挂载的项目根下任意文件、驱动 agent 自动批准任意工具调用。默认**不鉴权**（向后兼容单机场景），建议凡是监听非 loopback 地址就设置 `GROK_CHAT_TOKEN`：
 
 - 在 `.env` 里设置 `GROK_CHAT_TOKEN`，重启容器生效
 - HTTP：`Authorization: Bearer <token>` 或 `?token=` query 均可；WebSocket 握手浏览器不能带自定义 header，走 `?token=` query

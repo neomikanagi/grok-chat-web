@@ -579,18 +579,18 @@ def _pick_allow_option(options: list[dict[str, Any]]) -> str:
 
 
 def default_cwd() -> str:
+    """GROK_CHAT_CWD should always be set (see .env.example) to one of the
+    /roots/<name> mounts -- that's the whitelist _require_allowed() in
+    main.py enforces. The fallbacks below only matter if it's missing, and
+    stay inside /roots so they can never resolve to a path the whitelist
+    would then reject.
+    """
     env = os.environ.get("GROK_CHAT_CWD")
     if env and Path(env).is_dir():
         return str(Path(env).expanduser().resolve())
-    home = Path.home()
-    for candidate in (
-        home / "Developer",
-        home / "Projects",
-        home / "Code",
-        home / "workspaces",
-        Path("/mnt/workspaces"),
-        home,
-    ):
-        if candidate.is_dir():
-            return str(candidate.resolve())
+    roots = Path("/roots")
+    if roots.is_dir():
+        for child in sorted(roots.iterdir()):
+            if child.is_dir():
+                return str(child.resolve())
     return str(Path.cwd().resolve())
