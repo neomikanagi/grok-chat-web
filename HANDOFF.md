@@ -2,6 +2,17 @@
 
 > Cursor / GrokBuild / Claude Code 共用。换棒时在**最上面**追加一条，不要删历史。
 
+## 2026-07-11 — claudecode → user (映射即项目根 + 藏掉容器内部路径 + Cursor 式文件树)
+
+- **状态：** 成功。Playwright 连 ClaudeCode LXC CDP 实测：右侧树恰好显示 docs/notes/workspaces 三个根、树中所有路径都以 `/roots/` 开头、展开 docs 加载子项、**刷新后展开状态保持**（localStorage）、点文件后「引用」栏正确显示。API 侧：`/etc`、`/app`、`/roots/docs/../../etc`（穿越）一律 403。
+- **用户定的设计：** 项目根 = 挂载进 `/roots/` 的目录，**映射几个就是几个**；容器内部路径（`/`、`/app`、`/opt`…）绝不会被引用，UI 全部藏掉。项目根 ≠ 对话存储（对话在 `/app/data`，另一个挂载）。
+- **改了：**
+  - `app/main.py` — `_project_roots()` 只认 `/roots/*`（无挂载才回退默认 cwd）；新增 `_require_allowed()` 白名单强制，`fs/list`/`fs/search`/`set_cwd`/新会话 cwd 全部过白名单（顺带堵了任意路径浏览的安全面）；`fs/search` 不带 root 时跨全部根搜索，`rel` 带根名前缀；根目录的 `parent` 返回 null（不能向上爬）
+  - `static/` — 右侧栏改成懒加载文件树（根=映射目录，展开状态存 `gcw_tree_open`）；删掉「浏览其他路径」和整个"设置项目根"弹窗（连 CSS）；`@` 补全改为跨根搜索
+  - `.env`（本地）— `GROK_CHAT_CWD=/roots/workspaces/grok-chat-web`（默认 cwd 必须在白名单内）
+- **兼容：** compose 主文件的 `/workspace` 挂载**故意保留**——旧对话的 ACP cwd 还是 `/workspace`，删了挂载旧对话就打不开了；但 UI/API 不再显示它。
+- **不要还原：** 未映射路径 403 是刻意的安全边界，不是漏功能；「浏览其他路径」弹窗是刻意删除。想加/减根只改 override 里的 `-v` 行再 `docker compose up -d`。
+
 ## 2026-07-11 — claudecode → user (修复：run_terminal_command 全挂，"failed to deserialize response")
 
 - **状态：** 成功。端到端验证：WS 发 prompt 让 grok 执行 `echo grok-terminal-ok && uname -m`，tool_call `status=completed`、`exit_code=0`、输出正确回显，无反序列化报错。

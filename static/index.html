@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Grok Chat Web</title>
-  <link rel="stylesheet" href="/static/style.css?v=13" />
+  <link rel="stylesheet" href="/static/style.css?v=14" />
 </head>
 <body>
   <div id="app" class="layout">
@@ -30,7 +30,7 @@
           <span id="statusText">connecting…</span>
         </div>
         <div class="root-switcher">
-          <button id="cwdBtn" class="cwd-btn" type="button" title="项目根：点击切换 / 浏览任意路径">项目根：…</button>
+          <button id="cwdBtn" class="cwd-btn" type="button" title="项目根：点击切换（映射进容器的目录，映射几个就有几个）">项目根：…</button>
           <div id="rootsMenu" class="roots-menu" role="menu"></div>
         </div>
         <button id="toggleChatRail" class="icon-btn" type="button" title="展开/折叠对话列表">💬</button>
@@ -62,20 +62,16 @@
       </div>
     </div>
 
-    <aside id="sidebar" class="sidebar open" aria-label="引用文件">
+    <aside id="sidebar" class="sidebar open" aria-label="文件">
       <div class="sidebar-head">
-        <div class="sidebar-title">引用文件</div>
-        <button id="sidebarClose" class="icon-btn" type="button" title="折叠">⟩</button>
+        <div class="sidebar-title">文件</div>
+        <div class="sidebar-head-actions">
+          <button id="treeRefresh" class="icon-btn" type="button" title="刷新文件树">↻</button>
+          <button id="sidebarClose" class="icon-btn" type="button" title="折叠">⟩</button>
+        </div>
       </div>
 
-      <div id="sidePath" class="path-bar" title="当前浏览位置"></div>
-      <div class="side-nav">
-        <button id="sideUp" class="ghost-btn small" type="button">上级</button>
-        <button id="sideRefresh" class="ghost-btn small" type="button">刷新</button>
-        <button id="sideToProject" class="ghost-btn small" type="button" title="跳到项目根浏览">项目根</button>
-      </div>
-
-      <div id="sideList" class="side-list"></div>
+      <div id="sideTree" class="side-tree"></div>
 
       <div id="attachBar" class="attach-bar idle">
         <div class="attach-meta">
@@ -90,24 +86,6 @@
     </aside>
   </div>
 
-  <div id="picker" class="modal-backdrop" role="dialog" aria-modal="true">
-    <div class="modal">
-      <header>
-        <div class="brand">设置项目根</div>
-        <button id="pickerClose" class="ghost-btn" type="button">关闭</button>
-      </header>
-      <div class="modal-hint">
-        项目根 = Agent 默认工作目录。平时很少改；日常用右侧「引用」指具体文件。
-      </div>
-      <div id="pickerPath" class="path-bar"></div>
-      <div id="pickerList" class="list"></div>
-      <footer>
-        <button id="pickerUp" class="ghost-btn" type="button">上级</button>
-        <button id="pickerUse" class="primary-btn" type="button">设为项目根（新会话）</button>
-      </footer>
-    </div>
-  </div>
-
-  <script src="/static/app.js?v=12"></script>
+  <script src="/static/app.js?v=13"></script>
 </body>
 </html>

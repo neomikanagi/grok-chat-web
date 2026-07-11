@@ -47,30 +47,40 @@ ROOTS_DIR = Path("/roots")
 
 
 def _project_roots() -> list[dict[str, str]]:
-    """Quick-pick project roots for the UI switcher: the default
-    GROK_CHAT_CWD, plus one entry per subdirectory actually bind-mounted
-    under /roots. No separate NAME/PATH env vars to keep in sync --
-    whatever directory name you mount at /roots/<name> in docker-compose
-    IS the name shown, so it can't drift from what's actually there.
+    """Project roots = exactly what's bind-mounted under /roots, one entry
+    per subdirectory; the mount directory name IS the display name, so it
+    can't drift from what's actually there. Mount N dirs -> N roots.
+    Everything else in the container filesystem is invisible to the UI
+    (enforced by _require_allowed below). Only when /roots has nothing
+    (e.g. running outside docker) do we fall back to the default cwd.
     """
     roots: list[dict[str, str]] = []
-    seen: set[str] = set()
-
-    default = default_cwd()
-    default_hint = os.environ.get("GROK_CHAT_CWD_HINT") or ""
-    roots.append({"name": Path(default).name or "default", "path": default, "hint": default_hint})
-    seen.add(default)
-
     if ROOTS_DIR.is_dir():
         for child in sorted(ROOTS_DIR.iterdir()):
-            if not child.is_dir():
-                continue
-            resolved = str(child.resolve())
-            if resolved in seen:
-                continue
-            roots.append({"name": child.name, "path": resolved, "hint": ""})
-            seen.add(resolved)
+            if child.is_dir():
+                roots.append({"name": child.name, "path": str(child.resolve()), "hint": ""})
+    if not roots:
+        default = default_cwd()
+        hint = os.environ.get("GROK_CHAT_CWD_HINT") or ""
+        roots.append({"name": Path(default).name or "default", "path": default, "hint": hint})
     return roots
+
+
+def _allowed_bases() -> list[Path]:
+    return [Path(r["path"]) for r in _project_roots()]
+
+
+def _require_allowed(path: Path) -> Path:
+    """Resolve and reject anything outside the project roots. Container
+    internals (/, /app, /opt, ...) are never browsable or searchable."""
+    try:
+        resolved = path.expanduser().resolve()
+    except Exception as e:
+        raise HTTPException(400, f"invalid path: {e}") from e
+    for base in _allowed_bases():
+        if resolved == base or resolved.is_relative_to(base):
+            return resolved
+    raise HTTPException(403, f"path outside project roots: {resolved}")
 
 
 def _request_token(request: Request) -> Optional[str]:
@@ -248,11 +258,10 @@ async def fs_list(
     path: Optional[str] = Query(None),
     show_hidden: bool = Query(False),
 ) -> dict[str, Any]:
-    base = Path(path or bridge.cwd or default_cwd()).expanduser()
-    try:
-        base = base.resolve()
-    except Exception as e:
-        raise HTTPException(400, f"invalid path: {e}") from e
+    if path:
+        base = _require_allowed(Path(path))
+    else:
+        base = _allowed_bases()[0]
     if not base.exists():
         raise HTTPException(404, f"not found: {base}")
     if not base.is_dir():
@@ -273,43 +282,18 @@ async def fs_list(
         except OSError:
             continue
         entries.append({"name": name, "path": str(child), "is_dir": is_dir})
-    parent = str(base.parent) if base.parent != base else None
+    # Roots are top level: never expose a parent that would climb out
+    parent = None if base in _allowed_bases() else str(base.parent)
     return {"path": str(base), "parent": parent, "entries": entries}
 
 
-@app.get("/api/fs/search", dependencies=[Depends(require_token)])
-async def fs_search(
-    q: str = Query(..., min_length=1),
-    root: Optional[str] = Query(None),
-    limit: int = Query(40, ge=1, le=100),
-) -> dict[str, Any]:
-    base = Path(root or bridge.cwd or default_cwd()).expanduser().resolve()
-    if not base.is_dir():
-        raise HTTPException(400, f"bad root: {base}")
-
-    q_lower = q.lower().lstrip("@")
-    hits: list[dict[str, Any]] = []
-
-    try:
-        if q.startswith("/") or q.startswith("~"):
-            p = Path(q).expanduser()
-            parent = p.parent if not p.exists() else p if p.is_dir() else p.parent
-            if parent.is_dir():
-                prefix = p.name.lower()
-                for child in sorted(parent.iterdir(), key=lambda x: x.name.lower()):
-                    if prefix and not child.name.lower().startswith(prefix):
-                        continue
-                    if child.name.startswith("."):
-                        continue
-                    hits.append(
-                        {"name": child.name, "path": str(child), "is_dir": child.is_dir()}
-                    )
-                    if len(hits) >= limit:
-                        break
-            return {"query": q, "root": str(base), "entries": hits}
-    except Exception:
-        pass
-
+def _bfs_search(
+    base: Path,
+    root_name: str,
+    q_lower: str,
+    limit: int,
+    hits: list[dict[str, Any]],
+) -> None:
     stack = deque([base])
     depth_guard = 0
     while stack and len(hits) < limit and depth_guard < 5000:
@@ -329,14 +313,59 @@ async def fs_search(
                 continue
             rel = str(child.relative_to(base)) if child.is_relative_to(base) else str(child)
             if q_lower in name.lower() or q_lower in rel.lower():
-                hits.append({"name": name, "path": str(child), "is_dir": is_dir, "rel": rel})
+                hits.append(
+                    {"name": name, "path": str(child), "is_dir": is_dir, "rel": f"{root_name}/{rel}"}
+                )
                 if len(hits) >= limit:
                     break
             if is_dir and depth_guard < 2000 and (len(q_lower) >= 2 or child.parent == base):
                 if name not in ("node_modules", ".git", ".venv", "venv", "dist", "build", "target"):
                     stack.append(child)
 
-    return {"query": q, "root": str(base), "entries": hits}
+
+@app.get("/api/fs/search", dependencies=[Depends(require_token)])
+async def fs_search(
+    q: str = Query(..., min_length=1),
+    root: Optional[str] = Query(None),
+    limit: int = Query(40, ge=1, le=100),
+) -> dict[str, Any]:
+    q_lower = q.lower().lstrip("@")
+    hits: list[dict[str, Any]] = []
+
+    # "@/abs/path" prefix completion — only inside the project roots
+    if q.startswith("/") or q.startswith("~"):
+        try:
+            p = Path(q).expanduser()
+            parent = p.parent if not p.exists() else p if p.is_dir() else p.parent
+            parent = _require_allowed(parent)
+            prefix = p.name.lower() if not p.is_dir() else ""
+            for child in sorted(parent.iterdir(), key=lambda x: x.name.lower()):
+                if prefix and not child.name.lower().startswith(prefix):
+                    continue
+                if child.name.startswith("."):
+                    continue
+                hits.append({"name": child.name, "path": str(child), "is_dir": child.is_dir()})
+                if len(hits) >= limit:
+                    break
+        except (HTTPException, OSError):
+            pass
+        return {"query": q, "entries": hits}
+
+    if root:
+        base = _require_allowed(Path(root))
+        if not base.is_dir():
+            raise HTTPException(400, f"bad root: {base}")
+        _bfs_search(base, base.name, q_lower, limit, hits)
+    else:
+        # No root given: search across every project root
+        for r in _project_roots():
+            base = Path(r["path"])
+            if base.is_dir():
+                _bfs_search(base, r["name"], q_lower, limit, hits)
+            if len(hits) >= limit:
+                break
+
+    return {"query": q, "entries": hits}
 
 
 async def _open_conversation(conv_id: str) -> None:
@@ -420,7 +449,17 @@ async def _open_conversation(conv_id: str) -> None:
 
 async def _new_conversation(cwd: Optional[str] = None) -> None:
     global _active_conv_id
-    c = cwd or bridge.cwd or default_cwd()
+    if cwd:
+        try:
+            c = str(_require_allowed(Path(cwd)))
+        except HTTPException:
+            await broadcast({"type": "error", "message": f"目录不在项目根内：{cwd}"})
+            return
+    else:
+        try:
+            c = str(_require_allowed(Path(bridge.cwd or default_cwd())))
+        except HTTPException:
+            c = str(_allowed_bases()[0])
     async with _bridge_lock:
         await bridge.start()
         sid = await bridge.new_session(c)

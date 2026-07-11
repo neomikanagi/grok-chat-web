@@ -20,27 +20,18 @@
   const toggleSidebar = $("toggleSidebar");
   const sidebar = $("sidebar");
   const sidebarClose = $("sidebarClose");
-  const sidePath = $("sidePath");
-  const sideList = $("sideList");
-  const sideUp = $("sideUp");
-  const sideRefresh = $("sideRefresh");
-  const sideToProject = $("sideToProject");
+  const sideTree = $("sideTree");
+  const treeRefresh = $("treeRefresh");
   const attachBar = $("attachBar");
   const attachName = $("attachName");
   const attachPath = $("attachPath");
   const attachBtn = $("attachBtn");
   const acEl = $("ac");
-  const picker = $("picker");
-  const pickerPath = $("pickerPath");
-  const pickerList = $("pickerList");
 
   let ws = null;
   let sessionId = null; // ACP session id
   let conversationId = null; // server store id
   let cwd = "";
-  let browsePath = "";
-  let browseParent = null;
-  let homePath = "";
   let busy = false;
   let reconnectTimer = null;
   const isNarrow = window.innerWidth <= 860;
@@ -78,9 +69,18 @@
   let acActive = false;
   let acQueryStart = -1;
   let acTimer = null;
-  let pickerCwd = "";
-  let pickerParent = null;
   let suppressUserEcho = false;
+
+  // File-tree expansion state survives reloads (Cursor-style explorer)
+  let treeExpanded;
+  try {
+    treeExpanded = new Set(JSON.parse(localStorage.getItem("gcw_tree_open") || "[]"));
+  } catch {
+    treeExpanded = new Set();
+  }
+  function saveTreeExpanded() {
+    localStorage.setItem("gcw_tree_open", JSON.stringify([...treeExpanded]));
+  }
 
   function applyLayout() {
     appEl.classList.toggle("sidebar-collapsed", !sidebarOpen);
@@ -233,7 +233,7 @@
       addSystem("请先停止当前任务。");
       return;
     }
-    wsSend({ type: "new_session", cwd: cwd || homePath || undefined });
+    wsSend({ type: "new_session", cwd: cwd || undefined });
   }
 
   function addSystem(text) {
@@ -468,7 +468,7 @@
       ? { path: entry.path, name: entry.name, is_dir: !!entry.is_dir }
       : null;
     updateAttachBar();
-    sideList.querySelectorAll(".row").forEach((row) => {
+    sideTree.querySelectorAll(".tree-row").forEach((row) => {
       row.classList.toggle("selected", !!(selected && row.dataset.path === selected.path));
     });
   }
@@ -514,88 +514,113 @@
     inputEl.dispatchEvent(new Event("input"));
   }
 
-  async function loadSideList(path) {
-    const target = path || browsePath || cwd || homePath || "/";
-    try {
-      const res = await apiFetch(`/api/fs/list?path=${encodeURIComponent(target)}`);
-      if (!res.ok) {
-        addSystem("无法列出目录：" + (await res.text()));
-        return;
-      }
-      const data = await res.json();
-      browsePath = data.path;
-      browseParent = data.parent;
-      sidePath.textContent = data.path;
-      renderSideList(data.entries || []);
-    } catch (e) {
-      addSystem("列目录失败：" + e);
-    }
-  }
-  function renderSideList(entries) {
-    const rows = [];
-    for (const e of entries) {
-      const icon = e.is_dir ? "📁" : "📄";
-      const sel = selected && selected.path === e.path ? "selected" : "";
-      rows.push(`
-        <div class="row ${sel}" data-path="${escapeHtml(e.path)}"
-             data-name="${escapeHtml(e.name)}" data-dir="${e.is_dir ? "1" : "0"}"
-             title="${escapeHtml(e.path)}">
-          <span class="icon">${icon}</span>
-          <span class="name">${escapeHtml(e.name)}</span>
-        </div>`);
-    }
-    sideList.innerHTML =
-      rows.join("") || `<div class="row"><span class="name">（空目录）</span></div>`;
-    sideList.querySelectorAll(".row[data-path]").forEach((row) => {
-      row.addEventListener("click", () => {
-        const entry = {
-          path: row.dataset.path,
-          name: row.dataset.name,
-          is_dir: row.dataset.dir === "1",
-        };
-        if (entry.is_dir) {
-          setSelected(entry);
-          loadSideList(entry.path);
-        } else setSelected(entry);
-      });
-    });
+  // ── File tree (right sidebar) ─────────────────────────────────
+  // Roots = whatever is mounted into the container (/api/project-roots).
+  // Directories lazy-load children on expand; expansion state persists
+  // in localStorage so the tree looks the same after a reload.
+
+  function treeRowHtml(entry, depth, isRoot) {
+    const icon = entry.is_dir ? (isRoot ? "🗂️" : "📁") : "📄";
+    const chev = entry.is_dir ? `<span class="tree-chev">▶</span>` : `<span class="tree-chev leaf"></span>`;
+    return `
+      <div class="tree-row${isRoot ? " root" : ""}" data-path="${escapeHtml(entry.path)}"
+           data-name="${escapeHtml(entry.name)}" data-dir="${entry.is_dir ? "1" : "0"}"
+           style="--depth:${depth}" title="${escapeHtml(entry.path)}">
+        ${chev}
+        <span class="icon">${icon}</span>
+        <span class="name">${escapeHtml(entry.name)}</span>
+      </div>`;
   }
 
-  async function openPicker(startPath) {
-    picker.classList.add("open");
-    await loadPicker(startPath || cwd || homePath || "/");
-  }
-  function closePicker() {
-    picker.classList.remove("open");
-  }
-  async function loadPicker(path) {
-    const res = await apiFetch(`/api/fs/list?path=${encodeURIComponent(path)}`);
-    if (!res.ok) return;
-    const data = await res.json();
-    pickerCwd = data.path;
-    pickerParent = data.parent;
-    pickerPath.textContent = data.path;
-    const rows = [];
-    if (data.parent) {
-      rows.push(`<div class="row" data-up="1"><span>⬆️</span><span class="name">..</span></div>`);
+  function makeTreeNode(entry, depth, isRoot) {
+    const wrap = document.createElement("div");
+    wrap.className = "tree-node";
+    wrap.innerHTML = treeRowHtml(entry, depth, isRoot);
+    const row = wrap.firstElementChild;
+
+    if (!entry.is_dir) {
+      row.addEventListener("click", () => setSelected(entry));
+      return wrap;
     }
-    for (const e of data.entries || []) {
-      if (!e.is_dir) continue;
-      rows.push(
-        `<div class="row" data-path="${escapeHtml(e.path)}"><span>📁</span><span class="name">${escapeHtml(e.name)}</span></div>`
-      );
+
+    const children = document.createElement("div");
+    children.className = "tree-children";
+    children.hidden = true;
+    wrap.appendChild(children);
+    let loaded = false;
+
+    async function expand() {
+      row.classList.add("open");
+      row.querySelector(".tree-chev").textContent = "▼";
+      children.hidden = false;
+      treeExpanded.add(entry.path);
+      saveTreeExpanded();
+      if (loaded) return;
+      loaded = true;
+      children.innerHTML = `<div class="tree-loading">加载中…</div>`;
+      try {
+        const res = await apiFetch(`/api/fs/list?path=${encodeURIComponent(entry.path)}`);
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        children.innerHTML = "";
+        const entries = data.entries || [];
+        if (!entries.length) {
+          children.innerHTML = `<div class="tree-loading">（空）</div>`;
+          return;
+        }
+        for (const e of entries) {
+          const node = makeTreeNode(e, depth + 1, false);
+          children.appendChild(node);
+          // Restore saved expansion recursively
+          if (e.is_dir && treeExpanded.has(e.path)) {
+            node.querySelector(".tree-row").dispatchEvent(new Event("gcw-expand"));
+          }
+        }
+      } catch (e) {
+        loaded = false;
+        children.innerHTML = `<div class="tree-loading">加载失败</div>`;
+      }
     }
-    pickerList.innerHTML = rows.join("") || `<div class="row"><span class="name">（无子目录）</span></div>`;
-    pickerList.querySelectorAll(".row[data-path]").forEach((row) => {
-      row.addEventListener("click", () => loadPicker(row.dataset.path));
+
+    function collapse() {
+      row.classList.remove("open");
+      row.querySelector(".tree-chev").textContent = "▶";
+      children.hidden = true;
+      treeExpanded.delete(entry.path);
+      saveTreeExpanded();
+    }
+
+    row.addEventListener("click", () => {
+      setSelected(entry);
+      if (row.classList.contains("open")) collapse();
+      else expand();
     });
-    const up = pickerList.querySelector("[data-up]");
-    if (up) up.addEventListener("click", () => pickerParent && loadPicker(pickerParent));
+    row.addEventListener("gcw-expand", expand);
+    return wrap;
   }
-  function useProjectRoot() {
-    if (!pickerCwd || busy) return;
-    wsSend({ type: "set_cwd", cwd: pickerCwd });
-    closePicker();
+
+  let treeLoadedOnce = false;
+  async function loadTree(force) {
+    if (treeLoadedOnce && !force) return;
+    sideTree.innerHTML = `<div class="tree-loading">加载中…</div>`;
+    try {
+      const res = await apiFetch("/api/project-roots");
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      const items = data.items || [];
+      sideTree.innerHTML = "";
+      for (const r of items) {
+        const entry = { name: r.name, path: r.path, is_dir: true };
+        const node = makeTreeNode(entry, 0, true);
+        sideTree.appendChild(node);
+        if (treeExpanded.has(r.path)) {
+          node.querySelector(".tree-row").dispatchEvent(new Event("gcw-expand"));
+        }
+      }
+      treeLoadedOnce = true;
+    } catch (e) {
+      sideTree.innerHTML = `<div class="tree-loading">文件树加载失败</div>`;
+    }
   }
 
   function closeRootsMenu() {
@@ -621,18 +646,12 @@
     rootsMenu.classList.add("open");
     positionRootsMenu();
     window.addEventListener("resize", positionRootsMenu);
-    const browseRow = `<div class="row browse-other" data-browse="1">
-      <span class="name">浏览其他路径…</span>
-    </div>`;
     try {
       const res = await apiFetch("/api/project-roots");
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       const items = data.items || [];
-      const footNote =
-        items.length > 1
-          ? `<div class="foot-note">名字取自 docker-compose 里 <code>/roots/&lt;名字&gt;</code> 挂载的目录名</div>`
-          : "";
+      const footNote = `<div class="foot-note">映射进容器的目录就是项目根（docker-compose 里 <code>/roots/&lt;名字&gt;</code>），映射几个就有几个</div>`;
       rootsMenu.innerHTML =
         items
           .map((it) => {
@@ -644,7 +663,7 @@
               <span class="path">${escapeHtml(it.path)}</span>
             </div>`;
           })
-          .join("") + footNote + browseRow;
+          .join("") + footNote;
       rootsMenu.querySelectorAll(".row[data-path]").forEach((row) => {
         row.addEventListener("click", () => {
           const path = row.dataset.path;
@@ -652,16 +671,8 @@
           closeRootsMenu();
         });
       });
-      rootsMenu.querySelector(".browse-other").addEventListener("click", () => {
-        closeRootsMenu();
-        openPicker(cwd);
-      });
     } catch {
-      rootsMenu.innerHTML = `<div class="empty">加载项目根列表失败</div>` + browseRow;
-      rootsMenu.querySelector(".browse-other").addEventListener("click", () => {
-        closeRootsMenu();
-        openPicker(cwd);
-      });
+      rootsMenu.innerHTML = `<div class="empty">加载项目根列表失败</div>`;
     }
   }
 
@@ -705,7 +716,7 @@
         const who = auth.email || "not signed in";
         const model = init.currentModelId || "";
         setStatus(`${who}${model ? " · " + model : ""}`, auth.ok === false ? "err" : "ok");
-        loadSideList(cwd || homePath || "/");
+        loadTree();
         // Load active conversation transcript from server
         if (conversationId) {
           apiFetch(`/api/conversations/${encodeURIComponent(conversationId)}`)
@@ -733,7 +744,6 @@
         // Don't double-add streaming later; history is the source
         renderStoredMessages(c.messages || []);
         renderChatList();
-        if (cwd) loadSideList(cwd);
         break;
       }
       case "session":
@@ -894,9 +904,7 @@
       applyLayout();
     });
   }
-  sideUp.addEventListener("click", () => browseParent && loadSideList(browseParent));
-  sideRefresh.addEventListener("click", () => loadSideList(browsePath));
-  sideToProject.addEventListener("click", () => loadSideList(cwd || homePath || "/"));
+  treeRefresh.addEventListener("click", () => loadTree(true));
   cwdBtn.addEventListener("click", (e) => {
     e.stopPropagation();
     if (rootsMenu.classList.contains("open")) {
@@ -907,12 +915,6 @@
   });
   document.addEventListener("click", (e) => {
     if (!rootsMenu.contains(e.target) && e.target !== cwdBtn) closeRootsMenu();
-  });
-  $("pickerClose").addEventListener("click", closePicker);
-  $("pickerUse").addEventListener("click", useProjectRoot);
-  $("pickerUp").addEventListener("click", () => pickerParent && loadPicker(pickerParent));
-  picker.addEventListener("click", (e) => {
-    if (e.target === picker) closePicker();
   });
 
   inputEl.addEventListener("keydown", (e) => {
@@ -965,10 +967,13 @@
   }
   async function fetchAc(q) {
     try {
+      // Search spans every project root server-side; empty query lists the
+      // current cwd (falling back to the first root if cwd isn't browsable).
       const url = q
-        ? `/api/fs/search?q=${encodeURIComponent(q)}&root=${encodeURIComponent(cwd || browsePath || "")}`
-        : `/api/fs/list?path=${encodeURIComponent(cwd || browsePath || "")}`;
-      const res = await apiFetch(url);
+        ? `/api/fs/search?q=${encodeURIComponent(q)}`
+        : `/api/fs/list?path=${encodeURIComponent(cwd || "")}`;
+      let res = await apiFetch(url);
+      if (!res.ok && !q) res = await apiFetch("/api/fs/list");
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       acItems = (data.entries || []).slice(0, 30);
@@ -1025,15 +1030,6 @@
   }
 
   updateAttachBar();
-  // Update foot text in HTML via first system line
-  apiFetch("/api/defaults")
-    .then((r) => r.json())
-    .then((d) => {
-      homePath = d.home || "";
-    })
-    .catch(() => {})
-    .finally(() => {
-      addSystem("对话存在本机服务器磁盘（非浏览器缓存）。左侧列表换浏览器也能看到。");
-      connect();
-    });
+  addSystem("对话存在本机服务器磁盘（非浏览器缓存）。左侧列表换浏览器也能看到。");
+  connect();
 })();
