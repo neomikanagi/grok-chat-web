@@ -2,7 +2,14 @@
 
 > Cursor / GrokBuild / Claude Code 共用。换棒时在**最上面**追加一条，不要删历史。
 
-## 2026-07-11 — claudecode → user (手机/平板适配)
+## 2026-07-11 — claudecode → user (修复：auto-approve 改了不生效，无限弹批准窗)
+
+- **状态：** 成功。`/api/health` 验证 `always_approve: true`，agent 正常。
+- **根因：** 运行中的容器创建时吃的是 `GROK_CHAT_AUTO_APPROVE=0`（13:28 JST 启动），之后（14:27 JST）`.env` 被改成 `=1`——**Docker 环境变量在容器创建时固化，改 `.env` 必须重建容器**。改文件的是容器里的 Grok 自己：它改对了，但容器内没有 docker socket，不可能重建自己所在的容器，所以永远"改了没生效"。
+- **做了：** 宿主侧 `cd /mnt/user/workspaces/grok-chat-web && docker compose up -d`（compose 检测到 env 变化自动 Recreate）。零代码改动。
+- **副作用：** 重建杀掉了当时卡在批准弹窗上的那轮对话（kokkai 探针任务）。对话 JSON 在 `./data` 里还在，重开该对话让 Grok 继续即可。
+- **给下一棒的规矩：** 任何 `.env` / compose 环境变量改动，都要在**宿主**跑 `docker compose up -d` 才生效；让容器里的 agent 自己改自己的部署配置是死路。
+- **不要还原：** `.env` 里 `GROK_CHAT_AUTO_APPROVE=1` 是用户明确要求的全自动允许（token 鉴权仍在，安全面不变）。
 
 - **状态：** 成功，用 Playwright 连 ClaudeCode LXC 的 CDP 浏览器实测过 390×844（手机）和 768×1024（平板竖屏），截图确认。
 - **改了：** 两侧栏默认收起（首次访问 ≤860px 宽度时，之前是不管屏幕多窄都默认展开，跟用户截图里看到的一致）；加了点击遮罩关闭；触控目标加大到 ~40px；`#input` 在窄屏强制 16px 防 iOS 自动放大；手机宽度隐藏详细连接状态文字只留圆点；项目根切换菜单改成 JS 算 `position:fixed`（原来 `position:absolute` 相对按钮定位，实测在 390px 宽度下菜单左边缘会截断出屏幕外）。
