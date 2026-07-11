@@ -2,6 +2,17 @@
 
 > Cursor / GrokBuild / Claude Code 共用。换棒时在**最上面**追加一条，不要删历史。
 
+## 2026-07-11 — claudecode → user (多项目根切换器 + 固定 IP)
+
+- **状态：** 成功。回答了"workspace 到底是哪" 的疑问——不是没映射，是当初（上一条 HANDOFF）故意只挂了 `grok-chat-web` 自己的项目目录（`GROK_CHAT_PROJECTS_DIR`），没给全量 `workspaces`，为了不在没问过你的情况下就把 `_secrets` 之类的东西一起暴露给一个刚上线、还没验证过的部署。现在按你的要求做了"可以选多个项目根"。
+- **改了：**
+  - `app/main.py` — 新增 `GROK_CHAT_ROOT_<n>_NAME`/`_PATH` 环境变量对（`n=1,2,3...`），`/api/project-roots` 列出所有配置的根（含默认的 `GROK_CHAT_CWD`）
+  - `static/index.html`/`app.js`/`style.css` — 项目根按钮旁加了个下拉切换器（参考 Cursor 的多根工作区切换），点一下就切（复用现成的 `set_cwd` 流程，没加新的访问控制面——之前 `@` 路径搜索本来就能任意路径，这个只是加个快捷入口）
+  - `docker-compose.override.yml`（本地，不进 git）——加了 `GROK_CHAT_ROOT_1_NAME=workspaces` + 挂载 `/mnt/cache/workspaces:/roots/workspaces`，跟 Cursor/ClaudeCode/GrokBuild LXC 那几个工人容器的挂载范围对齐（含 `_secrets`，这是既有约定，不是新洞）
+  - 同时把 `grok-chat-web` 在 `darknet` 上的 IP 固定为 `172.20.0.4`（原来是 DHCP 分配，重启可能变）
+- **请你：** 如果还想加别的根（比如 `persistent-dev`），在 `docker-compose.override.yml` 里照 `docker-compose.override.yml.example` 的样子加 `GROK_CHAT_ROOT_2_NAME`/`_PATH` + 对应 volume 就行，不用改代码。
+- **不要还原**：`GROK_CHAT_ROOT_1_PATH` 指向 `/roots/workspaces` 不是笔误，是刻意用固定容器内路径（不是 `/workspace`）避免跟默认根冲突。
+
 ## 2026-07-11 — claudecode → user (迁移到宿主 Docker 部署，旧 LXC 部署退役)
 
 - **状态：** 成功。这个项目的实际部署方式变了——不再是"systemd unit 跑在 GrokBuild LXC 容器里"，而是"Docker 容器跑在 Unraid 宿主上，挂载宿主已持久化的 grok CLI"。旧的 GrokBuild LXC（`.126`）已经整个退役重建成纯浏览器手脚容器（不再跑 grok agent），新 IP `.140`，旧 rootfs 归档在 `/mnt/cache/lxc/_retired-GrokBuild-20260711`。
