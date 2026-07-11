@@ -2,6 +2,13 @@
 
 > Cursor / GrokBuild / Claude Code 共用。换棒时在**最上面**追加一条，不要删历史。
 
+## 2026-07-11 — claudecode → user (手机/平板适配)
+
+- **状态：** 成功，用 Playwright 连 ClaudeCode LXC 的 CDP 浏览器实测过 390×844（手机）和 768×1024（平板竖屏），截图确认。
+- **改了：** 两侧栏默认收起（首次访问 ≤860px 宽度时，之前是不管屏幕多窄都默认展开，跟用户截图里看到的一致）；加了点击遮罩关闭；触控目标加大到 ~40px；`#input` 在窄屏强制 16px 防 iOS 自动放大；手机宽度隐藏详细连接状态文字只留圆点；项目根切换菜单改成 JS 算 `position:fixed`（原来 `position:absolute` 相对按钮定位，实测在 390px 宽度下菜单左边缘会截断出屏幕外）。
+- **顺手挖到一个真 bug：** 项目根按钮的 `max-width: 40%` 在平板宽度（768px）下几乎坍缩成看不见的宽度——因为它挂在一个"按内容自动撑开宽度"的 flex 容器（`.root-switcher`）里，百分比 max-width 在这种情况下不会按预期方式解析到一个确定值。换成 `vw` 单位 + 给 `.root-switcher` 加 `flex-shrink:0` 解决。
+- **不要还原**：`.roots-menu` 从 `position: absolute` 改成 `position: fixed` + JS 里 `positionRootsMenu()` 计算位置，不是误改；`.cwd-btn` 的 `max-width` 用 `vw` 不用 `%`，同理。
+
 ## 2026-07-11 — claudecode → user (多根配置简化：自动发现 /roots 子目录)
 
 - **状态：** 成功。用户自己提出原来 `GROK_CHAT_ROOT_<n>_NAME`/`_PATH` 配对的设计有冗余——volume 挂载和环境变量各写一遍同一个路径，两边可能对不上（比如改了挂载忘记同步改名字）。
